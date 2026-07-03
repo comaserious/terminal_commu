@@ -70,13 +70,26 @@ def _post_identity(href: str) -> tuple[str, str] | None:
     return post_id, f"{BASE_URL}/{post_id}"
 
 
+def _board_column_index(soup: BeautifulSoup, label: str) -> int | None:
+    for header_row in soup.select("table.bd_lst thead > tr"):
+        headers = header_row.find_all(["th", "td"], recursive=False)
+        for index, header in enumerate(headers):
+            if _normalize_text(header) == label:
+                return index
+    return None
+
+
 def parse_board(html: str, page: int) -> PageResult[PostSummary]:
     soup = BeautifulSoup(html, "html.parser")
     posts: list[PostSummary] = []
+    view_column = _board_column_index(soup, "조회")
 
     for row in soup.select("table.bd_lst tbody > tr"):
         title_anchor = row.select_one("td.title > a[href]")
         if not isinstance(title_anchor, Tag):
+            continue
+        title = _normalize_text(title_anchor)
+        if not title:
             continue
 
         identity = _post_identity(str(title_anchor.get("href", "")))
@@ -84,7 +97,13 @@ def parse_board(html: str, page: int) -> PageResult[PostSummary]:
             continue
 
         post_id, canonical_url = identity
-        views = _normalize_text(row.select_one("td.m_no:not(.m_no_voted)")) or "0"
+        cells = row.find_all("td", recursive=False)
+        view_cell = (
+            cells[view_column]
+            if view_column is not None and view_column < len(cells)
+            else None
+        )
+        views = _normalize_text(view_cell) or "0"
         votes = _first_integer(row.select_one("td.m_no_voted"))
         reply_count = _first_integer(row.select_one("td.title .replyNum"))
         author = row.select_one("td.author .member_plate") or row.select_one(
@@ -94,7 +113,7 @@ def parse_board(html: str, page: int) -> PageResult[PostSummary]:
         posts.append(
             PostSummary(
                 post_id=post_id,
-                title=_normalize_text(title_anchor),
+                title=title,
                 category=_normalize_text(row.select_one("td.cate")),
                 author=_normalize_text(author),
                 created_at=_normalize_text(row.select_one("td.time")),

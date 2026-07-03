@@ -77,6 +77,31 @@ def test_parse_board_defaults_missing_views_to_zero() -> None:
     assert result.items[0].votes == 5
 
 
+def test_parse_board_skips_rows_with_empty_titles() -> None:
+    html = """
+    <table class="bd_lst"><tbody>
+      <tr><td class="title"><a href="/500"><span> </span></a></td></tr>
+      <tr><td class="title"><a href="/501">valid title</a></td></tr>
+    </tbody></table>
+    """
+
+    result = parse_board(html, page=1)
+
+    assert [post.post_id for post in result.items] == ["501"]
+
+
+def test_parse_board_rejects_table_with_only_empty_titles() -> None:
+    html = """
+    <table class="bd_lst"><tbody>
+      <tr><td class="title"><a href="/500"> </a></td></tr>
+      <tr><td class="title"><a href="/best/501"><span></span></a></td></tr>
+    </tbody></table>
+    """
+
+    with pytest.raises(ParseError, match="^missing board rows$"):
+        parse_board(html, page=1)
+
+
 def test_parse_post_extracts_body_links_comments_and_paging() -> None:
     detail, comments = parse_post(
         fixture("post.html"),
