@@ -29,14 +29,15 @@ def test_get_respects_ttl_and_can_return_stale_values(tmp_path) -> None:
 def test_get_removes_corrupt_json_rows(tmp_path) -> None:
     path = tmp_path / "cache.db"
     with closing(JsonCache(path, clock=lambda: 100.0)) as cache:
-        with sqlite3.connect(path) as connection:
-            connection.execute(
-                "INSERT INTO cache_entries (key, fetched_at, payload) VALUES (?, ?, ?)",
-                ("board:1", 1.0, "{"),
-            )
+        with closing(sqlite3.connect(path)) as connection:
+            with connection:
+                connection.execute(
+                    "INSERT INTO cache_entries (key, fetched_at, payload) VALUES (?, ?, ?)",
+                    ("board:1", 1.0, "{"),
+                )
 
         assert cache.get("board:1", ttl=60, allow_stale=True) is None
-        with sqlite3.connect(path) as connection:
+        with closing(sqlite3.connect(path)) as connection:
             assert connection.execute(
                 "SELECT key FROM cache_entries WHERE key = ?", ("board:1",)
             ).fetchone() is None
@@ -45,14 +46,15 @@ def test_get_removes_corrupt_json_rows(tmp_path) -> None:
 def test_get_removes_valid_json_that_is_not_an_object(tmp_path) -> None:
     path = tmp_path / "cache.db"
     with closing(JsonCache(path, clock=lambda: 100.0)) as cache:
-        with sqlite3.connect(path) as connection:
-            connection.execute(
-                "INSERT INTO cache_entries (key, fetched_at, payload) VALUES (?, ?, ?)",
-                ("board:1", 1.0, "[]"),
-            )
+        with closing(sqlite3.connect(path)) as connection:
+            with connection:
+                connection.execute(
+                    "INSERT INTO cache_entries (key, fetched_at, payload) VALUES (?, ?, ?)",
+                    ("board:1", 1.0, "[]"),
+                )
 
         assert cache.get("board:1", ttl=60, allow_stale=True) is None
-        with sqlite3.connect(path) as connection:
+        with closing(sqlite3.connect(path)) as connection:
             assert connection.execute(
                 "SELECT key FROM cache_entries WHERE key = ?", ("board:1",)
             ).fetchone() is None
@@ -111,14 +113,15 @@ def test_put_rolls_back_when_a_trigger_aborts_the_write(tmp_path) -> None:
 def test_get_removes_non_text_payloads(tmp_path) -> None:
     path = tmp_path / "cache.db"
     with closing(JsonCache(path, clock=lambda: 100.0)) as cache:
-        with sqlite3.connect(path) as connection:
-            connection.execute(
-                "INSERT INTO cache_entries (key, fetched_at, payload) VALUES (?, ?, ?)",
-                ("board:1", 1.0, sqlite3.Binary(b"\xff")),
-            )
+        with closing(sqlite3.connect(path)) as connection:
+            with connection:
+                connection.execute(
+                    "INSERT INTO cache_entries (key, fetched_at, payload) VALUES (?, ?, ?)",
+                    ("board:1", 1.0, sqlite3.Binary(b"\xff")),
+                )
 
         assert cache.get("board:1", ttl=60, allow_stale=True) is None
-        with sqlite3.connect(path) as connection:
+        with closing(sqlite3.connect(path)) as connection:
             assert connection.execute(
                 "SELECT key FROM cache_entries WHERE key = ?", ("board:1",)
             ).fetchone() is None
