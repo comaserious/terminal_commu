@@ -169,6 +169,31 @@ async def test_invalid_or_past_retry_after_uses_normal_spacing(
 
 
 @pytest.mark.asyncio
+async def test_overflowing_retry_after_is_ignored_without_masking_rate_limit() -> None:
+    retry_after = "9" * 400
+    responses = iter(
+        [
+            httpx.Response(429, headers={"Retry-After": retry_after}),
+            httpx.Response(200, text="ok"),
+        ]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return next(responses)
+
+    clock = FakeClock(10.0)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
+        client = FmkHttpClient(raw_client, clock=clock, sleep=clock.sleep)
+
+        with pytest.raises(RateLimited) as rate_limited:
+            await client.get_text("https://www.fmkorea.com/rate-limited")
+        assert rate_limited.value.retry_after == retry_after
+        assert await client.get_text("https://www.fmkorea.com/next") == "ok"
+
+    assert clock.sleeps == [2.0]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("error_type", "message"),
     [
@@ -246,11 +271,27 @@ async def test_article_text_mentioning_challenges_is_returned(body: str) -> None
 
 
 @pytest.mark.asyncio
+async def test_article_title_mentioning_captcha_is_returned() -> None:
+    body = (
+        "<html><head><title>Why CAPTCHA appears - FMKorea</title></head>"
+        "<body><article>Ordinary article content.</article></body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
+        client = FmkHttpClient(raw_client)
+
+        assert await client.get_text("https://www.fmkorea.com/post") == body
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "body",
     [
         "<html><head><title>Access Denied</title></head><body></body></html>",
-        "<html><head><title>Complete CAPTCHA</title></head><body></body></html>",
+        "<html><head><title>CAPTCHA</title></head><body></body></html>",
         '<form id="captcha-form"><input name="captcha_token"></form>',
         '<div class="captcha-container">Verify that you are human</div>',
     ],
@@ -312,6 +353,44 @@ async def test_redirects_neither_store_nor_forward_cookies() -> None:
 
         assert requests == [("/start", None), ("/final", None)]
         assert len(raw_client.cookies.jar) == 0
+
+
+@pytest.mark.asyncio
+async def test_cross_origin_redirect_is_rejected_before_sending_secrets() -> None:
+    requests: list[tuple[str, str | None, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(
+            (
+                str(request.url),
+                request.headers.get("Authorization"),
+                request.headers.get("X-API-Key"),
+            )
+        )
+        return httpx.Response(
+            302,
+            headers={"Location": "https://other.test/collect"},
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        headers={
+            "Authorization": "Bearer secret",
+            "X-API-Key": "api-secret",
+        },
+    ) as raw_client:
+        client = FmkHttpClient(raw_client, min_interval=0)
+
+        with pytest.raises(FetchError, match="cross-origin redirect"):
+            await client.get_text("https://www.fmkorea.com/start")
+
+    assert requests == [
+        (
+            "https://www.fmkorea.com/start",
+            "Bearer secret",
+            "api-secret",
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -396,6 +475,51 @@ async def test_concurrent_requests_are_serialized_through_response_completion() 
 
     assert results == ["/one", "/two"]
     assert max_in_flight == 1
+
+
+@pytest.mark.asyncio
+async def test_cancellation_releases_lock_and_clears_cookies() -> None:
+    request_started = asyncio.Event()
+    request_count = 0
+    cookie_headers: list[str | None] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
+        cookie_headers.append(request.headers.get("Cookie"))
+        if request_count == 1:
+            raw_client.cookies.set(
+                "session",
+                "secret",
+                domain="www.fmkorea.com",
+                path="/",
+            )
+            request_started.set()
+            await asyncio.Event().wait()
+        return httpx.Response(200, text="ok")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
+        client = FmkHttpClient(raw_client, min_interval=0)
+        cancelled_request = asyncio.create_task(
+            client.get_text("https://www.fmkorea.com/cancelled")
+        )
+        await request_started.wait()
+
+        cancelled_request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled_request
+
+        assert len(raw_client.cookies.jar) == 0
+        assert (
+            await asyncio.wait_for(
+                client.get_text("https://www.fmkorea.com/next"),
+                timeout=1.0,
+            )
+            == "ok"
+        )
+
+    assert request_count == 2
+    assert cookie_headers == [None, None]
 
 
 @pytest.mark.asyncio

@@ -75,8 +75,10 @@ class FmkHttpClient:
     def _is_challenge_page(text: str) -> bool:
         soup = BeautifulSoup(text, "html.parser")
         if soup.title is not None:
-            title = soup.title.get_text(" ", strip=True).casefold()
-            if "captcha" in title or "access denied" in title:
+            title = " ".join(
+                soup.title.get_text(" ", strip=True).casefold().split()
+            )
+            if title in {"access denied", "captcha", "just a moment"}:
                 return True
 
         for element in soup.find_all(True):
@@ -130,7 +132,10 @@ class FmkHttpClient:
                 raise FetchError(
                     f"FMKorea redirect limit exceeded at HTTP {response.status_code}"
                 )
-            current_url = str(response.url.join(location))
+            redirect_url = response.url.join(location)
+            if self._origin(redirect_url) != self._origin(response.url):
+                raise FetchError("FMKorea rejected cross-origin redirect")
+            current_url = str(redirect_url)
 
         raise FetchError("FMKorea redirect limit exceeded")
 
@@ -153,17 +158,30 @@ class FmkHttpClient:
         if callable(clear):
             clear()
 
+    @staticmethod
+    def _origin(url: httpx.URL) -> tuple[str, str, int | None]:
+        scheme = url.scheme.casefold()
+        port = url.port
+        if port is None:
+            port = {"http": 80, "https": 443}.get(scheme)
+        return scheme, url.host.casefold(), port
+
     def _set_retry_deadline(self, retry_after: str | None) -> None:
         if retry_after is None:
             return
 
         try:
-            delay = float(int(retry_after))
+            delta_seconds = int(retry_after)
         except ValueError:
             try:
                 retry_at = parsedate_to_datetime(retry_after)
                 delay = retry_at.timestamp() - self._wall_clock()
             except (TypeError, ValueError, OverflowError):
+                return
+        else:
+            try:
+                delay = float(delta_seconds)
+            except OverflowError:
                 return
 
         if delay > 0:
