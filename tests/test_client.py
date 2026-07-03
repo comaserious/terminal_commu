@@ -110,6 +110,25 @@ async def test_challenge_page_maps_to_access_blocked(body: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_response_cookies_are_neither_stored_nor_sent() -> None:
+    cookie_headers: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        cookie_headers.append(request.headers.get("Cookie"))
+        headers = {"Set-Cookie": "session=secret"} if len(cookie_headers) == 1 else {}
+        return httpx.Response(200, headers=headers, text="ok")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
+        client = FmkHttpClient(raw_client, min_interval=0)
+
+        await client.get_text("https://www.fmkorea.com/first")
+        await client.get_text("https://www.fmkorea.com/second")
+
+        assert cookie_headers == [None, None]
+        assert len(raw_client.cookies.jar) == 0
+
+
+@pytest.mark.asyncio
 async def test_concurrent_requests_are_serialized_through_response_completion() -> None:
     in_flight = 0
     max_in_flight = 0

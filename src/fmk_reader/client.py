@@ -30,12 +30,15 @@ class FmkHttpClient:
                     await self._sleep(delay)
 
             self._last_started = self._clock()
+            self._clear_cookies()
             try:
                 response = await self._client.get(url)
             except httpx.TimeoutException as exc:
                 raise FetchError("FMKorea request timed out") from exc
             except httpx.HTTPError as exc:
                 raise FetchError("FMKorea request failed") from exc
+            finally:
+                self._clear_cookies()
 
         if response.status_code == 429:
             raise RateLimited(response.headers.get("Retry-After"))
@@ -49,6 +52,12 @@ class FmkHttpClient:
         if "captcha" in normalized_text or "access denied" in normalized_text:
             raise AccessBlocked("FMKorea returned a challenge page")
         return text
+
+    def _clear_cookies(self) -> None:
+        cookies = getattr(self._client, "cookies", None)
+        clear = getattr(cookies, "clear", None)
+        if callable(clear):
+            clear()
 
 
 def make_httpx_client() -> httpx.AsyncClient:
