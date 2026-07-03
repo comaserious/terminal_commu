@@ -287,6 +287,21 @@ async def test_article_title_mentioning_captcha_is_returned() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("title", ["Complete CAPTCHA", "Just a moment..."])
+async def test_exact_known_challenge_titles_are_blocked(title: str) -> None:
+    body = f"<html><head><title>{title}</title></head><body></body></html>"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
+        client = FmkHttpClient(raw_client)
+
+        with pytest.raises(AccessBlocked, match="FMKorea returned a challenge page"):
+            await client.get_text("https://www.fmkorea.com/post")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "body",
     [

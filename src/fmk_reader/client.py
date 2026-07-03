@@ -77,8 +77,13 @@ class FmkHttpClient:
         if soup.title is not None:
             title = " ".join(
                 soup.title.get_text(" ", strip=True).casefold().split()
-            )
-            if title in {"access denied", "captcha", "just a moment"}:
+            ).rstrip(" .…")
+            if title in {
+                "access denied",
+                "captcha",
+                "complete captcha",
+                "just a moment",
+            }:
                 return True
 
         for element in soup.find_all(True):
