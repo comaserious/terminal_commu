@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 from fmk_reader.cache import CacheHit, JsonCache
 
 
@@ -58,7 +60,7 @@ def test_get_removes_valid_json_that_is_not_an_object(tmp_path) -> None:
     cache.close()
 
 
-def test_put_upserts_value_and_timestamp_and_cache_can_be_closed(tmp_path) -> None:
+def test_put_upserts_value_and_timestamp(tmp_path) -> None:
     now = [100.0]
     cache = JsonCache(tmp_path / "nested" / "cache.db", clock=lambda: now[0])
     cache.put("board:1", {"page": 1})
@@ -70,3 +72,13 @@ def test_put_upserts_value_and_timestamp_and_cache_can_be_closed(tmp_path) -> No
         value={"page": 2}, fetched_at=125.0, is_stale=False
     )
     cache.close()
+
+
+def test_close_closes_connection(tmp_path) -> None:
+    cache = JsonCache(tmp_path / "cache.db")
+    connection = cache._connection
+
+    cache.close()
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        connection.execute("SELECT 1")
