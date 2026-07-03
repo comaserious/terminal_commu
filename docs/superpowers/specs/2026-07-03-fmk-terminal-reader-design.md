@@ -6,6 +6,13 @@
 
 대상 게시판은 `https://www.fmkorea.com/football_world` 한 곳으로 고정한다. 구현은 Python과 Textual을 사용한다.
 
+## 실행 환경
+
+- Conda 환경: `basic-env`
+- 확인된 Python 버전: 3.12.13
+- 개발, 테스트, 실행 전에 `conda activate basic-env`를 사용한다.
+- 프로젝트 의존성은 `pyproject.toml`에 선언하고 활성화된 `basic-env`에 설치한다.
+
 ## 목표
 
 - `fmk` 실행 즉시 해외축구 게시판 목록을 보여준다.
@@ -153,6 +160,7 @@ terminal_community/
 
 ## 완료 기준
 
+- `conda activate basic-env` 후 의존성을 설치하고 테스트와 앱을 실행할 수 있다.
 - macOS 터미널에서 `fmk` 명령으로 앱이 시작된다.
 - 해외축구 게시판 목록을 읽고 방향키로 선택할 수 있다.
 - 선택한 글의 본문과 댓글을 이미지 없이 터미널에서 읽을 수 있다.
