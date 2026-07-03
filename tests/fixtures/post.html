@@ -9,9 +9,10 @@
         <div class="btm_area">
           <div class="side"><span class="member_plate">작성자</span></div>
           <div class="side fr">
-            조회 수 <b>20</b>
-            추천 수 <b>3</b>
-            댓글 <b>2</b>
+            <span>추천 수 <b>3</b></span>
+            <span>관련 글 <b>99</b></span>
+            <span>댓글 <b>2</b></span>
+            <span>조회 수 <b>20</b></span>
           </div>
         </div>
       </header>
@@ -19,8 +20,13 @@
         <article>
           <div class="xe_content">
             첫 줄<br>
+            <div id="pi__lazy">지연 로딩 문구</div>
             <img src="/image.jpg" alt="이미지">
             <a href="https://example.com/news">관련 뉴스</a>
+            <a href="https://example.com/news">중복 뉴스</a>
+            <a href=" https://example.com/other ">공백 링크</a>
+            <a href="javascript:alert(1)">위험 링크</a>
+            <a href="mailto:test@example.com">메일 링크</a>
             <iframe src="https://video.example/embed/1"></iframe>
           </div>
         </article>
@@ -41,7 +47,20 @@
               <a class="member_plate">답글러</a>
               <span class="date">방금</span>
             </div>
-            <div class="comment-content"><div class="xe_content">답글</div></div>
+            <div class="comment-content">
+              <div class="xe_content">
+                답글<img src="/comment.jpg"><iframe src="/comment-video"></iframe>
+              </div>
+            </div>
+          </li>
+          <li class="fdb_itm" id="comment_bad">
+            <div class="comment-content"><div class="xe_content">잘못된 ID</div></div>
+          </li>
+          <li class="fdb_itm" id="comment_12">
+            <div class="comment-content"><div class="xe_content"> </div></div>
+          </li>
+          <li class="fdb_itm">
+            <div class="comment-content"><div class="xe_content">ID 없음</div></div>
           </li>
         </ul>
         <div class="bd_pg">

@@ -33,6 +33,43 @@ def _require(root: Tag | BeautifulSoup, selector: str, name: str) -> Tag:
     return element
 
 
+def _require_text(root: Tag | BeautifulSoup, selector: str, name: str) -> str:
+    text = _normalize_text(_require(root, selector, name))
+    if not text:
+        raise ParseError(f"missing {name}")
+    return text
+
+
+def _numeric_attribute(element: Tag, attribute: str, name: str) -> str:
+    value = str(element.get(attribute, ""))
+    if re.fullmatch(r"\d+", value) is None:
+        raise ParseError(f"invalid {name}")
+    return value
+
+
+def _post_identity(href: str) -> tuple[str, str] | None:
+    parsed = urlparse(urljoin(BASE_URL, href.strip()))
+    if parsed.scheme not in {"http", "https"} or parsed.netloc != "www.fmkorea.com":
+        return None
+
+    path_match = _DOCUMENT_PATH.fullmatch(parsed.path)
+    if path_match is not None:
+        post_id = path_match.group(1)
+    elif parsed.path == "/index.php":
+        query = parse_qs(parsed.query)
+        mids = query.get("mid", [])
+        document_ids = query.get("document_srl", [])
+        if mids != ["football_world"] or len(document_ids) != 1:
+            return None
+        post_id = document_ids[0]
+        if not post_id.isdigit():
+            return None
+    else:
+        return None
+
+    return post_id, f"{BASE_URL}/{post_id}"
+
+
 def parse_board(html: str, page: int) -> PageResult[PostSummary]:
     soup = BeautifulSoup(html, "html.parser")
     posts: list[PostSummary] = []
@@ -42,14 +79,13 @@ def parse_board(html: str, page: int) -> PageResult[PostSummary]:
         if not isinstance(title_anchor, Tag):
             continue
 
-        href = str(title_anchor.get("href", ""))
-        path_match = _DOCUMENT_PATH.fullmatch(href)
-        if path_match is None:
+        identity = _post_identity(str(title_anchor.get("href", "")))
+        if identity is None:
             continue
 
-        numeric_cells = row.select("td.m_no")
-        views = _normalize_text(numeric_cells[0]) if numeric_cells else ""
-        votes = _first_integer(numeric_cells[1]) if len(numeric_cells) > 1 else 0
+        post_id, canonical_url = identity
+        views = _normalize_text(row.select_one("td.m_no:not(.m_no_voted)")) or "0"
+        votes = _first_integer(row.select_one("td.m_no_voted"))
         reply_count = _first_integer(row.select_one("td.title .replyNum"))
         author = row.select_one("td.author .member_plate") or row.select_one(
             "td.author"
@@ -57,7 +93,7 @@ def parse_board(html: str, page: int) -> PageResult[PostSummary]:
 
         posts.append(
             PostSummary(
-                post_id=path_match.group(1),
+                post_id=post_id,
                 title=_normalize_text(title_anchor),
                 category=_normalize_text(row.select_one("td.cate")),
                 author=_normalize_text(author),
@@ -65,7 +101,7 @@ def parse_board(html: str, page: int) -> PageResult[PostSummary]:
                 views=views,
                 votes=votes,
                 comment_count=reply_count,
-                url=urljoin(BASE_URL, href),
+                url=canonical_url,
                 is_notice="notice" in row.get("class", []),
             )
         )
@@ -93,7 +129,7 @@ def _render_content(content: Tag) -> tuple[str, tuple[str, ...]]:
 
     links: list[str] = []
     for anchor in rendered.select("a[href]"):
-        href = str(anchor.get("href", ""))
+        href = str(anchor.get("href", "")).strip()
         parsed = urlparse(href)
         if parsed.scheme in {"http", "https"} and parsed.netloc and href not in links:
             links.append(href)
@@ -120,32 +156,50 @@ def _comment_page(href: str) -> int | None:
     return int(values[0])
 
 
+def _post_stats(root: Tag) -> tuple[str, int, int]:
+    views = "0"
+    votes = 0
+    comment_count = 0
+    for span in root.select(".rd_hd .btm_area .side.fr span"):
+        value = span.select_one("b")
+        if value is None:
+            continue
+        label = _normalize_text(span)
+        if label.startswith("조회 수"):
+            views = _normalize_text(value) or "0"
+        elif label.startswith("추천 수"):
+            votes = _first_integer(value)
+        elif label.startswith("댓글"):
+            comment_count = _first_integer(value)
+    return views, votes, comment_count
+
+
 def parse_post(
     html: str,
     url: str,
     cpage: int,
 ) -> tuple[PostDetail, PageResult[Comment]]:
     soup = BeautifulSoup(html, "html.parser")
-    root = soup.select_one(".rd[data-docsrl]")
-    if not isinstance(root, Tag):
-        raise ParseError("missing post title or root")
-
-    title = _require(root, ".rd_hd .np_18px_span", "post title")
+    root = _require(soup, ".rd[data-docsrl]", "post root")
+    post_id = _numeric_attribute(root, "data-docsrl", "post id")
+    title = _require_text(root, ".rd_hd .np_18px_span", "post title")
     body = _require(root, ".rd_body article .xe_content", "post body")
     rendered_body, links = _render_content(body)
-    stats = root.select(".rd_hd .btm_area .side.fr b")
+    if not rendered_body:
+        raise ParseError("missing post body")
+    views, votes, comment_count = _post_stats(root)
 
     summary = PostSummary(
-        post_id=str(root.get("data-docsrl", "")),
-        title=_normalize_text(title),
+        post_id=post_id,
+        title=title,
         category=_normalize_text(soup.select_one(".tl_srch a.category")),
         author=_normalize_text(
             root.select_one(".rd_hd .btm_area .side .member_plate")
         ),
         created_at=_normalize_text(root.select_one(".rd_hd .date")),
-        views=_normalize_text(stats[0]) if stats else "0",
-        votes=_first_integer(stats[1]) if len(stats) > 1 else 0,
-        comment_count=_first_integer(stats[2]) if len(stats) > 2 else 0,
+        views=views,
+        votes=votes,
+        comment_count=comment_count,
         url=url,
         is_notice=False,
     )
@@ -153,20 +207,25 @@ def parse_post(
 
     comments: list[Comment] = []
     for item in soup.select(".fdb_lst_ul > li.fdb_itm"):
+        id_match = re.fullmatch(r"comment_(\d+)", str(item.get("id", "")))
+        if id_match is None:
+            continue
+        content_node = item.select_one(".comment-content .xe_content")
+        if not isinstance(content_node, Tag):
+            continue
+        comment_content, _ = _render_content(content_node)
+        if not comment_content:
+            continue
+
         style = str(item.get("style", ""))
         margin = re.search(r"margin-left\s*:\s*(\d+)\s*%", style, re.IGNORECASE)
         depth = int(margin.group(1)) // 2 if margin else 0
-        comment_id = str(item.get("id", ""))
-        if comment_id.startswith("comment_"):
-            comment_id = comment_id.removeprefix("comment_")
 
         comments.append(
             Comment(
-                comment_id=comment_id,
+                comment_id=id_match.group(1),
                 author=_normalize_text(item.select_one(".meta .member_plate")),
-                content=_normalize_text(
-                    item.select_one(".comment-content .xe_content")
-                ),
+                content=comment_content,
                 created_at=_normalize_text(item.select_one(".meta .date")),
                 depth=depth,
             )
