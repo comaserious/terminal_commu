@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any, Generic, Protocol, TypeVar
 
 from fmk_reader.cache import JsonCache
-from fmk_reader.errors import FetchError, RateLimited
+from fmk_reader.errors import FetchError, ParseError, RateLimited
 from fmk_reader.models import Comment, PageResult, PostDetail, PostSummary
 from fmk_reader.parser import parse_board, parse_post
 
@@ -134,6 +134,8 @@ class BoardService:
         try:
             html = await self._client.get_text(url)
             detail, comments = parse_post(html, post.url, cpage=cpage)
+            if detail.summary.post_id != post.post_id:
+                raise ParseError("post id mismatch")
         except FetchError as exc:
             stale_page = self._cached_post_page(
                 combined_key, allow_stale=True

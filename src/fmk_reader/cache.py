@@ -18,18 +18,70 @@ class CacheHit:
 class JsonCache:
     def __init__(self, path: Path, clock: Callable[[], float] = time.time) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(path)
         self._clock = clock
-        self.connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS cache_entries (
-                key TEXT PRIMARY KEY,
-                fetched_at REAL NOT NULL,
-                payload TEXT NOT NULL
+        try:
+            self.connection = self._open(path)
+        except sqlite3.DatabaseError as error:
+            if not self._is_corrupt(error):
+                raise
+            self._quarantine(path)
+            self.connection = self._open(path)
+
+    @staticmethod
+    def _is_corrupt(error: sqlite3.DatabaseError) -> bool:
+        code = getattr(error, "sqlite_errorcode", None)
+        return code is not None and code & 0xFF in {
+            sqlite3.SQLITE_CORRUPT,
+            sqlite3.SQLITE_NOTADB,
+        }
+
+    @staticmethod
+    def _open(path: Path) -> sqlite3.Connection:
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS cache_entries (
+                    key TEXT PRIMARY KEY,
+                    fetched_at REAL NOT NULL,
+                    payload TEXT NOT NULL
+                )
+                """
             )
-            """
+            connection.commit()
+        except sqlite3.DatabaseError:
+            if connection is not None:
+                connection.close()
+            raise
+        return connection
+
+    @staticmethod
+    def _quarantine(path: Path) -> None:
+        if not (path.is_file() or path.is_symlink()):
+            return
+
+        index = 0
+        while True:
+            suffix = ".corrupt" if index == 0 else f".corrupt.{index}"
+            destination = path.with_name(f"{path.name}{suffix}")
+            destinations = (
+                destination,
+                destination.with_name(f"{destination.name}-wal"),
+                destination.with_name(f"{destination.name}-shm"),
+            )
+            if not any(candidate.exists() for candidate in destinations):
+                break
+            index += 1
+
+        sources = (
+            path,
+            path.with_name(f"{path.name}-wal"),
+            path.with_name(f"{path.name}-shm"),
         )
-        self.connection.commit()
+        for source, target in zip(sources, destinations, strict=True):
+            if source.is_file() or source.is_symlink():
+                source.replace(target)
 
     def put(self, key: str, value: dict[str, Any]) -> None:
         payload = json.dumps(value, ensure_ascii=False)

@@ -9,7 +9,7 @@ import pytest
 
 from fmk_reader.cache import JsonCache
 from fmk_reader.errors import AccessBlocked, FetchError, ParseError, RateLimited
-from fmk_reader.models import Comment, PageResult, PostDetail, PostSummary
+from fmk_reader.models import Comment, PageResult, PostSummary
 from fmk_reader.parser import parse_board, parse_post
 from fmk_reader.service import BOARD_URL, BoardService, DataSource, PostPage
 
@@ -171,6 +171,29 @@ async def test_fresh_post_page_cache_avoids_network(cache: JsonCache) -> None:
     assert cached.value == expected.value
     assert cached.source is DataSource.CACHE
     assert client.urls == [post.url]
+
+
+async def test_load_post_rejects_mismatched_response_before_cache_write(
+    cache: JsonCache,
+) -> None:
+    post = board_post()
+    valid_html = fixture("post.html")
+    mismatched_html = valid_html.replace(
+        'data-docSrl="100"', 'data-docSrl="999"', 1
+    )
+    client = FakeClient(valid_html, mismatched_html)
+    service = BoardService(client, cache)
+    original = await service.load_post(post)
+
+    with pytest.raises(ParseError, match="post id mismatch"):
+        await service.load_post(post, refresh=True)
+
+    combined = cache.get(f"post:{post.post_id}:comments:1", ttl=120.0)
+    body = cache.get(f"post:{post.post_id}:body", ttl=1800.0)
+    assert combined is not None
+    assert combined.value == original.value.to_dict()
+    assert body is not None
+    assert body.value == original.value.detail.to_dict()
 
 
 async def test_expired_combined_post_cache_is_stale_fallback(
