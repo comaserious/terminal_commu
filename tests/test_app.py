@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from dataclasses import replace
 from typing import Protocol
 
 import pytest
@@ -100,6 +102,128 @@ class FakeService:
             cpage,
             cpage > 1,
             cpage < 2,
+        )
+        return LoadResult(PostPage(detail, comments), DataSource.CACHE)
+
+
+class DelayedService(FakeService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.board_gate = asyncio.Event()
+        self.post_gate = asyncio.Event()
+
+    async def load_board(
+        self, page: int, refresh: bool = False
+    ) -> LoadResult[PageResult[PostSummary]]:
+        if page == 1:
+            return await super().load_board(page, refresh)
+        self.board_calls.append((page, refresh))
+        await self.board_gate.wait()
+        return LoadResult(
+            PageResult(POSTS, page, page > 1, page < 2),
+            DataSource.CACHE,
+        )
+
+    async def load_post(
+        self,
+        post: PostSummary,
+        cpage: int = 1,
+        refresh: bool = False,
+    ) -> LoadResult[PostPage]:
+        if cpage == 1:
+            return await super().load_post(post, cpage, refresh)
+        self.post_calls.append((post.post_id, cpage, refresh))
+        await self.post_gate.wait()
+        detail = PostDetail(post, self.body, ())
+        comments = PageResult(
+            (Comment("2", "댓글러", f"댓글 내용 {cpage}", "방금", 0),),
+            cpage,
+            cpage > 1,
+            cpage < 2,
+        )
+        return LoadResult(PostPage(detail, comments), DataSource.CACHE)
+
+
+class FailingPageService(FakeService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_board_page_2 = True
+        self.fail_comment_page_2 = True
+        self.fail_post_ids: set[str] = set()
+        self.failed_post_gate = asyncio.Event()
+
+    async def load_board(
+        self, page: int, refresh: bool = False
+    ) -> LoadResult[PageResult[PostSummary]]:
+        self.board_calls.append((page, refresh))
+        if page == 2 and self.fail_board_page_2:
+            raise ReaderError("board page 2 failed")
+        posts = tuple(
+            replace(post, title=f"{post.title} p{page}") for post in POSTS
+        )
+        return LoadResult(
+            PageResult(posts, page, page > 1, page < 2),
+            DataSource.CACHE,
+        )
+
+    async def load_post(
+        self,
+        post: PostSummary,
+        cpage: int = 1,
+        refresh: bool = False,
+    ) -> LoadResult[PostPage]:
+        self.post_calls.append((post.post_id, cpage, refresh))
+        if post.post_id in self.fail_post_ids:
+            await self.failed_post_gate.wait()
+            raise ReaderError("new post failed")
+        if cpage == 2 and self.fail_comment_page_2:
+            raise ReaderError("comment page 2 failed")
+        detail = PostDetail(post, f"본문 {post.post_id}", ())
+        comments = PageResult(
+            (Comment("1", "댓글러", f"댓글 내용 {cpage}", "방금", 0),),
+            cpage,
+            cpage > 1,
+            cpage < 2,
+        )
+        return LoadResult(PostPage(detail, comments), DataSource.CACHE)
+
+
+class LiteralTextService(FakeService):
+    async def load_board(
+        self, page: int, refresh: bool = False
+    ) -> LoadResult[PageResult[PostSummary]]:
+        self.board_calls.append((page, refresh))
+        post = replace(
+            POSTS[0],
+            title="[bold]제목[/bold] a[b]c [/]",
+            author="[bold]작성자[/bold] a[b]c [/]",
+        )
+        return LoadResult(
+            PageResult((post,), page, False, False),
+            DataSource.CACHE,
+        )
+
+    async def load_post(
+        self,
+        post: PostSummary,
+        cpage: int = 1,
+        refresh: bool = False,
+    ) -> LoadResult[PostPage]:
+        self.post_calls.append((post.post_id, cpage, refresh))
+        detail = PostDetail(post, "[bold]본문[/bold] a[b]c [/]", ())
+        comments = PageResult(
+            (
+                Comment(
+                    "1",
+                    "[bold]댓글러[/bold] a[b]c [/],",
+                    "[bold]댓글[/bold] a[b]c [/],",
+                    "방금",
+                    0,
+                ),
+            ),
+            1,
+            False,
+            False,
         )
         return LoadResult(PostPage(detail, comments), DataSource.CACHE)
 
@@ -340,3 +464,184 @@ async def test_production_resources_are_owned_but_injected_service_is_not(
     async with injected_app.run_test(size=(120, 30)) as pilot:
         await settle(injected_app, pilot)
     assert not hasattr(injected, "closed")
+
+
+async def test_remote_rich_like_text_is_rendered_literally() -> None:
+    app = FmkReaderApp(service=LiteralTextService())
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        label = app.query_one("#post-list", ListView).query_one("Label")
+        assert "[bold]제목[/bold] a[b]c [/]" in str(label.render())
+
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert widget_text(app.query_one("#article-title", Static)) == (
+            "[bold]제목[/bold] a[b]c [/]"
+        )
+        assert "[bold]작성자[/bold] a[b]c [/]" in widget_text(
+            app.query_one("#article-meta", Static)
+        )
+        content = widget_text(app.query_one("#article-content", Static))
+        assert "[bold]본문[/bold] a[b]c [/]" in content
+        assert "[bold]댓글러[/bold] a[b]c [/]" in content
+        assert "[bold]댓글[/bold] a[b]c [/]" in content
+
+
+async def test_rapid_arrows_coalesce_to_next_confirmed_pages() -> None:
+    service = DelayedService()
+    app = FmkReaderApp(service=service)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("right")
+        await pilot.pause()
+        await pilot.press("right", "right")
+        await pilot.pause()
+        assert service.board_calls == [(1, False), (2, False)]
+        assert app.board_page == 1
+        service.board_gate.set()
+        await settle(app, pilot)
+        assert app.board_page == 2
+
+        await pilot.press("left")
+        await settle(app, pilot)
+        await pilot.press("enter")
+        await settle(app, pilot)
+        await pilot.press("tab", "right")
+        await pilot.pause()
+        await pilot.press("right", "right")
+        await pilot.pause()
+        assert service.post_calls == [("100", 1, False), ("100", 2, False)]
+        assert app.comment_page == 1
+        service.post_gate.set()
+        await settle(app, pilot)
+        assert app.comment_page == 2
+
+
+async def test_failed_board_navigation_keeps_confirmed_state_and_retries() -> None:
+    service = FailingPageService()
+    app = NoticeApp(service)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        post_list = app.query_one("#post-list", ListView)
+        before = " ".join(
+            str(label.render()) for label in post_list.query("Label")
+        )
+
+        await pilot.press("right")
+        await settle(app, pilot)
+        after_failure = " ".join(
+            str(label.render()) for label in post_list.query("Label")
+        )
+        assert app.board_page == 1
+        assert app.board_has_next
+        assert not app.board_has_previous
+        assert after_failure == before
+        assert app.notices == ["board page 2 failed"]
+
+        service.fail_board_page_2 = False
+        await pilot.press("right")
+        await settle(app, pilot)
+        assert app.board_page == 2
+        assert app.board_has_previous
+        assert not app.board_has_next
+        rendered = " ".join(
+            str(label.render()) for label in post_list.query("Label")
+        )
+        assert "p2" in rendered
+
+
+async def test_failed_comment_navigation_and_new_post_failure_clear_stale_ui() -> None:
+    service = FailingPageService()
+    app = NoticeApp(service)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("enter")
+        await settle(app, pilot)
+        await pilot.press("tab", "right")
+        await settle(app, pilot)
+        content = app.query_one("#article-content", Static)
+        assert app.comment_page == 1
+        assert app.comments_have_next
+        assert not app.comments_have_previous
+        assert "댓글 내용 1" in widget_text(content)
+
+        service.fail_comment_page_2 = False
+        await pilot.press("right")
+        await settle(app, pilot)
+        assert app.comment_page == 2
+        assert app.comments_have_previous
+        assert not app.comments_have_next
+        assert "댓글 내용 2" in widget_text(content)
+
+        await pilot.press("escape", "down")
+        service.fail_post_ids.add("101")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert "불러오는 중..." in widget_text(content)
+        service.failed_post_gate.set()
+        await settle(app, pilot)
+        assert "불러오기 실패" in widget_text(content)
+        assert "본문 100" not in widget_text(content)
+
+
+async def test_live_resize_moves_focus_to_visible_pane() -> None:
+    app = FmkReaderApp(service=FakeService())
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        main = app.query_one("#main", Horizontal)
+        post_list = app.query_one("#post-list", ListView)
+        article = app.query_one("#article-pane", VerticalScroll)
+
+        await pilot.resize_terminal(90, 30)
+        await pilot.pause()
+        assert main.has_class("narrow")
+        assert post_list.display and post_list.has_focus
+        await pilot.resize_terminal(120, 30)
+        await pilot.pause()
+        assert post_list.display and article.display
+
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert post_list.has_focus
+        await pilot.resize_terminal(90, 30)
+        await pilot.pause()
+        assert article.display and article.has_focus
+        await pilot.resize_terminal(120, 30)
+        await pilot.pause()
+        assert post_list.display and article.display and article.has_focus
+
+
+async def test_cache_closes_when_http_client_close_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenRawClient:
+        async def aclose(self) -> None:
+            raise RuntimeError("close failed")
+
+    class Cache:
+        def __init__(self, path: object) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    raw = BrokenRawClient()
+    cache = Cache(object())
+    monkeypatch.setattr(app_module, "make_httpx_client", lambda: raw)
+    monkeypatch.setattr(app_module, "FmkHttpClient", lambda client: client)
+    monkeypatch.setattr(app_module, "JsonCache", lambda path: cache)
+    monkeypatch.setattr(
+        app_module,
+        "BoardService",
+        lambda client, owned_cache: FakeService(),
+    )
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        async with FmkReaderApp().run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+    assert cache.closed

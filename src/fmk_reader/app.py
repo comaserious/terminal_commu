@@ -37,7 +37,7 @@ class PostItem(ListItem):
             f"[{post.category}] {post.title}\n"
             f"추천 {post.votes} · 댓글 {post.comment_count} · {post.created_at}"
         )
-        super().__init__(Label(text))
+        super().__init__(Label(text, markup=False))
 
 
 class ArticlePane(VerticalScroll):
@@ -75,15 +75,24 @@ class FmkReaderApp(App[None]):
         self.comments_have_previous = False
         self.comments_have_next = False
         self.current_post: PostSummary | None = None
+        self._displayed_post_id: str | None = None
+        self._board_request_id = 0
+        self._post_request_id = 0
+        self._pending_board_page: int | None = None
+        self._pending_post_key: tuple[str, int] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="main"):
             yield ListView(id="post-list")
             with ArticlePane(id="article-pane"):
-                yield Static("글을 선택하세요", id="article-title")
-                yield Static("", id="article-meta")
-                yield Static("", id="article-content")
+                yield Static(
+                    "글을 선택하세요",
+                    id="article-title",
+                    markup=False,
+                )
+                yield Static("", id="article-meta", markup=False)
+                yield Static("", id="article-content", markup=False)
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -94,75 +103,173 @@ class FmkReaderApp(App[None]):
     async def on_unmount(self) -> None:
         if not self._owns_resources:
             return
-        if self.raw_client is not None:
-            await self.raw_client.aclose()
-        if self.cache is not None:
-            self.cache.close()
+        try:
+            if self.raw_client is not None:
+                await self.raw_client.aclose()
+        finally:
+            if self.cache is not None:
+                self.cache.close()
+
+    def load_board(
+        self,
+        refresh: bool = False,
+        *,
+        target_page: int | None = None,
+    ) -> None:
+        target = self.board_page if target_page is None else target_page
+        if self._pending_board_page == target and not refresh:
+            return
+        self._board_request_id += 1
+        request_id = self._board_request_id
+        self._pending_board_page = target
+        self._load_board(target, refresh, request_id)
 
     @work(exclusive=True, group="board")
-    async def load_board(self, refresh: bool = False) -> None:
+    async def _load_board(
+        self,
+        target_page: int,
+        refresh: bool,
+        request_id: int,
+    ) -> None:
         try:
-            result = await self.service.load_board(
-                self.board_page, refresh=refresh
-            )
-        except ReaderError as error:
-            self.notify(str(error), severity="error")
-            return
+            try:
+                result = await self.service.load_board(
+                    target_page, refresh=refresh
+                )
+            except ReaderError as error:
+                if request_id == self._board_request_id:
+                    self.notify(str(error), severity="error", markup=False)
+                return
 
-        post_list = self.query_one("#post-list", ListView)
-        await post_list.clear()
-        await post_list.extend(PostItem(post) for post in result.value.items)
-        if result.value.items:
-            post_list.index = 0
-        self.board_has_previous = result.value.has_previous
-        self.board_has_next = result.value.has_next
-        self.sub_title = f"{result.value.page}페이지 · {result.source.value}"
-        if result.warning:
-            self.notify(result.warning, severity="warning")
+            if request_id != self._board_request_id:
+                return
+
+            post_list = self.query_one("#post-list", ListView)
+            await post_list.clear()
+            await post_list.extend(
+                PostItem(post) for post in result.value.items
+            )
+            if result.value.items:
+                post_list.index = 0
+            self.board_page = result.value.page
+            self.board_has_previous = result.value.has_previous
+            self.board_has_next = result.value.has_next
+            self.sub_title = (
+                f"{result.value.page}페이지 · {result.source.value}"
+            )
+            if result.warning:
+                self.notify(result.warning, severity="warning", markup=False)
+        finally:
+            if request_id == self._board_request_id:
+                self._pending_board_page = None
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         if not isinstance(event.item, PostItem):
             return
         self.current_post = event.item.post
         self.comment_page = 1
+        self.comments_have_previous = False
+        self.comments_have_next = False
+        self._displayed_post_id = None
+        self._show_loading(event.item.post)
         main = self.query_one("#main", Horizontal)
         main.add_class("reading")
         if main.has_class("narrow"):
             self.query_one("#article-pane", ArticlePane).focus()
-        self.load_post()
+        self.load_post(post=event.item.post, target_page=1)
+
+    def load_post(
+        self,
+        refresh: bool = False,
+        *,
+        post: PostSummary | None = None,
+        target_page: int | None = None,
+    ) -> None:
+        selected_post = self.current_post if post is None else post
+        if selected_post is None:
+            return
+        target = self.comment_page if target_page is None else target_page
+        key = (selected_post.post_id, target)
+        if self._pending_post_key == key and not refresh:
+            return
+        self._post_request_id += 1
+        request_id = self._post_request_id
+        self._pending_post_key = key
+        self._load_post(selected_post, target, refresh, request_id)
 
     @work(exclusive=True, group="post")
-    async def load_post(self, refresh: bool = False) -> None:
-        if self.current_post is None:
-            return
+    async def _load_post(
+        self,
+        post: PostSummary,
+        target_page: int,
+        refresh: bool,
+        request_id: int,
+    ) -> None:
         try:
-            result = await self.service.load_post(
-                self.current_post,
-                self.comment_page,
-                refresh=refresh,
-            )
-        except ReaderError as error:
-            self.notify(str(error), severity="error")
-            return
+            try:
+                result = await self.service.load_post(
+                    post,
+                    target_page,
+                    refresh=refresh,
+                )
+            except ReaderError as error:
+                if self._is_current_post_request(post, request_id):
+                    self.notify(str(error), severity="error", markup=False)
+                    if self._displayed_post_id != post.post_id:
+                        self._show_load_failure(post, error)
+                return
 
-        page = result.value
-        self.comments_have_previous = page.comments.has_previous
-        self.comments_have_next = page.comments.has_next
-        summary = page.detail.summary
-        self.query_one("#article-title", Static).update(summary.title)
-        self.query_one("#article-meta", Static).update(
-            f"{summary.author} · {summary.created_at} · 조회 {summary.views} "
-            f"· 추천 {summary.votes} · 댓글 {summary.comment_count}"
+            if not self._is_current_post_request(post, request_id):
+                return
+
+            page = result.value
+            self.comment_page = page.comments.page
+            self.comments_have_previous = page.comments.has_previous
+            self.comments_have_next = page.comments.has_next
+            self._displayed_post_id = post.post_id
+            summary = page.detail.summary
+            self.query_one("#article-title", Static).update(summary.title)
+            self.query_one("#article-meta", Static).update(
+                f"{summary.author} · {summary.created_at} · 조회 {summary.views} "
+                f"· 추천 {summary.votes} · 댓글 {summary.comment_count}"
+            )
+            self.query_one("#article-content", Static).update(
+                self._format_article(page)
+            )
+            self.sub_title = (
+                f"글 {summary.post_id} · 댓글 {page.comments.page}페이지 "
+                f"· {result.source.value}"
+            )
+            if result.warning:
+                self.notify(
+                    result.warning, severity="warning", markup=False
+                )
+        finally:
+            if request_id == self._post_request_id:
+                self._pending_post_key = None
+
+    def _is_current_post_request(
+        self, post: PostSummary, request_id: int
+    ) -> bool:
+        return (
+            request_id == self._post_request_id
+            and self.current_post is not None
+            and self.current_post.post_id == post.post_id
         )
+
+    def _show_loading(self, post: PostSummary) -> None:
+        self.query_one("#article-title", Static).update(post.title)
+        self.query_one("#article-meta", Static).update("불러오는 중...")
+        self.query_one("#article-content", Static).update("불러오는 중...")
+
+    def _show_load_failure(
+        self, post: PostSummary, error: ReaderError
+    ) -> None:
+        self.query_one("#article-title", Static).update(post.title)
+        self.query_one("#article-meta", Static).update("불러오기 실패")
         self.query_one("#article-content", Static).update(
-            self._format_article(page)
+            f"불러오기 실패: {error}"
         )
-        self.sub_title = (
-            f"글 {summary.post_id} · 댓글 {page.comments.page}페이지 "
-            f"· {result.source.value}"
-        )
-        if result.warning:
-            self.notify(result.warning, severity="warning")
 
     @staticmethod
     def _format_article(page: PostPage) -> str:
@@ -187,29 +294,25 @@ class FmkReaderApp(App[None]):
     def action_previous_page(self) -> None:
         if self.query_one("#post-list", ListView).has_focus:
             if self.board_has_previous:
-                self.board_page -= 1
-                self.load_board()
+                self.load_board(target_page=self.board_page - 1)
             return
         if (
             self.query_one("#article-pane", ArticlePane).has_focus
             and self.comments_have_previous
         ):
-            self.comment_page -= 1
-            self.load_post()
+            self.load_post(target_page=self.comment_page - 1)
 
     def action_next_page(self) -> None:
         if self.query_one("#post-list", ListView).has_focus:
             if self.board_has_next:
-                self.board_page += 1
-                self.load_board()
+                self.load_board(target_page=self.board_page + 1)
             return
         if (
             self.query_one("#article-pane", ArticlePane).has_focus
             and self.current_post is not None
             and self.comments_have_next
         ):
-            self.comment_page += 1
-            self.load_post()
+            self.load_post(target_page=self.comment_page + 1)
 
     def action_refresh(self) -> None:
         if (
@@ -228,7 +331,14 @@ class FmkReaderApp(App[None]):
         self._sync_layout(event.size.width)
 
     def _sync_layout(self, width: int) -> None:
-        self.query_one("#main", Horizontal).set_class(width < 100, "narrow")
+        main = self.query_one("#main", Horizontal)
+        narrow = width < 100
+        main.set_class(narrow, "narrow")
+        if narrow:
+            if main.has_class("reading"):
+                self.query_one("#article-pane", ArticlePane).focus()
+            else:
+                self.query_one("#post-list", ListView).focus()
 
 
 def main() -> None:
