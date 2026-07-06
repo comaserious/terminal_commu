@@ -1,0 +1,47 @@
+#main {
+    height: 1fr;
+}
+
+#post-list {
+    width: 38%;
+    border-right: solid $primary;
+}
+
+#article-pane {
+    width: 62%;
+    padding: 0 2;
+}
+
+#article-title {
+    text-style: bold;
+    color: $warning;
+    margin-bottom: 1;
+}
+
+#article-meta {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+#main.narrow #post-list {
+    width: 100%;
+    display: block;
+}
+
+#main.narrow #article-pane {
+    width: 100%;
+    display: none;
+}
+
+#main.narrow.reading #post-list {
+    display: none;
+}
+
+#main.narrow.reading #article-pane {
+    display: block;
+}
+
+PostItem {
+    height: auto;
+    padding: 0 1;
+}
