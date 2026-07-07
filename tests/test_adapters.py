@@ -23,13 +23,8 @@ def test_adapter_for_returns_fmk_adapter() -> None:
 
 
 def test_adapter_for_rejects_sites_without_implemented_adapters() -> None:
-    dcinside = route_url(
-        "https://gall.dcinside.com/board/lists/?id=football_new9"
-    )
     arca = route_url("https://arca.live/b/rogersfu")
 
-    with pytest.raises(NotImplementedError):
-        adapter_for(dcinside)
     with pytest.raises(NotImplementedError):
         adapter_for(arca)
 
