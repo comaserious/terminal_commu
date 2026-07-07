@@ -54,9 +54,6 @@ class CommunityHttpClient:
     async def get_text(self, url: str) -> str:
         async with self._lock:
             self._raise_if_cooling_down()
-            await self._wait_for_turn()
-
-            self._last_started = self._clock()
             try:
                 response = await self._request(url)
             except httpx.TimeoutException as exc:
@@ -144,6 +141,8 @@ class CommunityHttpClient:
         for redirect_count in range(self._MAX_REDIRECTS + 1):
             if self._origin(httpx.URL(current_url)) not in self._policy.allowed_origins:
                 raise FetchError(f"{self._site_name} rejected request origin")
+            await self._wait_for_turn()
+            self._last_started = self._clock()
             response = await self._send_without_state(current_url)
             if response.status_code not in self._REDIRECT_STATUSES:
                 return response

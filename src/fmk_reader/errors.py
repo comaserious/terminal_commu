@@ -1,5 +1,5 @@
 class ReaderError(Exception):
-    """Base exception for FMKorea reader failures."""
+    """Base exception for community reader failures."""
 
 
 class TargetError(ReaderError):
@@ -7,11 +7,11 @@ class TargetError(ReaderError):
 
 
 class ParseError(ReaderError):
-    """Raised when an FMKorea response does not have the expected structure."""
+    """Raised when a community response does not have the expected structure."""
 
 
 class FetchError(ReaderError):
-    """Raised when an FMKorea response cannot be fetched."""
+    """Raised when a community response cannot be fetched."""
 
 
 class RateLimited(FetchError):
@@ -25,4 +25,4 @@ class RateLimited(FetchError):
 
 
 class AccessBlocked(FetchError):
-    """Raised when FMKorea blocks access to a request."""
+    """Raised when a community site blocks access to a request."""

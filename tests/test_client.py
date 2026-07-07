@@ -468,6 +468,26 @@ async def test_redirects_neither_store_nor_forward_cookies() -> None:
 
 
 @pytest.mark.asyncio
+async def test_each_redirect_hop_is_spaced_from_the_previous_start() -> None:
+    clock = FakeClock(10.0)
+    request_starts: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_starts.append(clock.now)
+        if request.url.path == "/start":
+            return httpx.Response(302, headers={"Location": "/final"})
+        return httpx.Response(200, text="done")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw:
+        client = FmkHttpClient(raw, clock=clock, sleep=clock.sleep)
+
+        assert await client.get_text("https://www.fmkorea.com/start") == "done"
+
+    assert request_starts == [10.0, 12.0]
+    assert clock.sleeps == [2.0]
+
+
+@pytest.mark.asyncio
 async def test_cross_origin_redirect_is_rejected_before_sending_secrets() -> None:
     requests: list[tuple[str, str | None, str | None]] = []
 
