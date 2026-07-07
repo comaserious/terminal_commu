@@ -2,6 +2,10 @@ class ReaderError(Exception):
     """Base exception for FMKorea reader failures."""
 
 
+class TargetError(ReaderError):
+    """Raised before network access when a community URL is unsupported."""
+
+
 class ParseError(ReaderError):
     """Raised when an FMKorea response does not have the expected structure."""
 
