@@ -3,15 +3,20 @@ import math
 import time
 from collections.abc import Awaitable, Callable
 from email.utils import parsedate_to_datetime
+from typing import Any
 
 import httpx
 from bs4 import BeautifulSoup
 
+from fmk_reader.adapters.base import RequestPolicy
+from fmk_reader.adapters.fmk import FmkAdapter
 from fmk_reader.errors import AccessBlocked, FetchError, RateLimited
 
+FMK_POLICY = FmkAdapter.policy
 
-class FmkHttpClient:
-    """Stateless FMKorea requests over a caller-owned async client.
+
+class CommunityHttpClient:
+    """Stateless community requests over a caller-owned async client.
 
     This wrapper exclusively controls the injected client's request session state,
     while the caller remains responsible for closing the client.
@@ -22,16 +27,22 @@ class FmkHttpClient:
 
     def __init__(
         self,
-        client: httpx.AsyncClient,
-        min_interval: float = 2.0,
+        raw: httpx.AsyncClient,
+        policy: RequestPolicy,
+        min_interval: float | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         wall_clock: Callable[[], float] = time.time,
     ) -> None:
+        if min_interval is None:
+            min_interval = policy.min_interval
         if min_interval < 0 or not math.isfinite(min_interval):
             raise ValueError("min_interval must be finite and non-negative")
 
-        self._client = client
+        self._client = raw
+        self._policy = policy
+        self._site_name = policy.site.display_name
+        self._site_headers = _headers_for_policy(policy)
         self._min_interval = min_interval
         self._clock = clock
         self._sleep = sleep
@@ -42,33 +53,34 @@ class FmkHttpClient:
 
     async def get_text(self, url: str) -> str:
         async with self._lock:
+            self._raise_if_cooling_down()
             await self._wait_for_turn()
 
             self._last_started = self._clock()
             try:
                 response = await self._request(url)
             except httpx.TimeoutException as exc:
-                raise FetchError("FMKorea request timed out") from exc
+                raise FetchError(f"{self._site_name} request timed out") from exc
             except httpx.HTTPStatusError as exc:
                 raise FetchError(
-                    f"FMKorea returned HTTP {exc.response.status_code}"
+                    f"{self._site_name} returned HTTP {exc.response.status_code}"
                 ) from exc
             except httpx.HTTPError as exc:
-                raise FetchError("FMKorea request failed") from exc
+                raise FetchError(f"{self._site_name} request failed") from exc
 
-            if response.status_code == 429:
+            if response.status_code in self._policy.rate_limit_statuses:
                 retry_after = response.headers.get("Retry-After")
                 self._set_retry_deadline(retry_after)
-                raise RateLimited(retry_after)
+                raise RateLimited(self._site_name, retry_after)
 
-        if response.status_code == 403:
-            raise AccessBlocked("FMKorea denied access")
+        if response.status_code in self._policy.blocked_statuses:
+            raise AccessBlocked(f"{self._site_name} denied access")
         if not response.is_success:
-            raise FetchError(f"FMKorea returned HTTP {response.status_code}")
+            raise FetchError(f"{self._site_name} returned HTTP {response.status_code}")
 
         text = response.text
         if self._is_challenge_page(text):
-            raise AccessBlocked("FMKorea returned a challenge page")
+            raise AccessBlocked(f"{self._site_name} returned a challenge page")
         return text
 
     @staticmethod
@@ -110,19 +122,28 @@ class FmkHttpClient:
         not_before = now
         if self._last_started is not None:
             not_before = max(not_before, self._last_started + self._min_interval)
-        if self._retry_not_before is not None:
-            not_before = max(not_before, self._retry_not_before)
 
         delay = not_before - now
         if delay <= 0:
             return
         await self._sleep(delay)
         if self._clock() < not_before:
-            raise FetchError("FMKorea request spacing could not be enforced")
+            raise FetchError(
+                f"{self._site_name} request spacing could not be enforced"
+            )
+
+    def _raise_if_cooling_down(self) -> None:
+        if self._retry_not_before is None:
+            return
+        remaining = math.ceil(self._retry_not_before - self._clock())
+        if remaining > 0:
+            raise RateLimited(self._site_name, str(remaining))
 
     async def _request(self, url: str) -> httpx.Response:
         current_url = url
         for redirect_count in range(self._MAX_REDIRECTS + 1):
+            if self._origin(httpx.URL(current_url)) not in self._policy.allowed_origins:
+                raise FetchError(f"{self._site_name} rejected request origin")
             response = await self._send_without_state(current_url)
             if response.status_code not in self._REDIRECT_STATUSES:
                 return response
@@ -130,19 +151,22 @@ class FmkHttpClient:
             location = response.headers.get("Location")
             if not location:
                 raise FetchError(
-                    f"FMKorea returned HTTP {response.status_code} "
+                    f"{self._site_name} returned HTTP {response.status_code} "
                     "without a redirect location"
                 )
             if redirect_count == self._MAX_REDIRECTS:
                 raise FetchError(
-                    f"FMKorea redirect limit exceeded at HTTP {response.status_code}"
+                    f"{self._site_name} redirect limit exceeded at HTTP "
+                    f"{response.status_code}"
                 )
             redirect_url = response.url.join(location)
-            if self._origin(redirect_url) != self._origin(response.url):
-                raise FetchError("FMKorea rejected cross-origin redirect")
+            if self._origin(redirect_url) not in self._policy.allowed_origins:
+                raise FetchError(
+                    f"{self._site_name} rejected cross-origin redirect"
+                )
             current_url = str(redirect_url)
 
-        raise FetchError("FMKorea redirect limit exceeded")
+        raise FetchError(f"{self._site_name} redirect limit exceeded")
 
     async def _send_without_state(self, url: str) -> httpx.Response:
         self._clear_cookies()
@@ -150,10 +174,10 @@ class FmkHttpClient:
             build_request = getattr(self._client, "build_request", None)
             send = getattr(self._client, "send", None)
             if callable(build_request) and callable(send):
-                request = build_request("GET", url)
+                request = build_request("GET", url, headers=self._site_headers)
                 request.headers.pop("cookie", None)
                 return await send(request, follow_redirects=False)
-            return await self._client.get(url)
+            return await self._client.get(url, headers=self._site_headers)
         finally:
             self._clear_cookies()
 
@@ -164,12 +188,12 @@ class FmkHttpClient:
             clear()
 
     @staticmethod
-    def _origin(url: httpx.URL) -> tuple[str, str, int | None]:
+    def _origin(url: httpx.URL) -> tuple[str, str, int]:
         scheme = url.scheme.casefold()
         port = url.port
         if port is None:
             port = {"http": 80, "https": 443}.get(scheme)
-        return scheme, url.host.casefold(), port
+        return scheme, url.host.casefold(), port or -1
 
     def _set_retry_deadline(self, retry_after: str | None) -> None:
         if retry_after is None:
@@ -193,12 +217,21 @@ class FmkHttpClient:
             self._retry_not_before = self._clock() + delay
 
 
-def make_httpx_client() -> httpx.AsyncClient:
+class FmkHttpClient(CommunityHttpClient):
+    def __init__(self, raw: httpx.AsyncClient, **kwargs: Any) -> None:
+        super().__init__(raw, FMK_POLICY, **kwargs)
+
+
+def _headers_for_policy(policy: RequestPolicy) -> dict[str, str]:
+    return {
+        "User-Agent": policy.user_agent,
+        "Accept-Language": "ko-KR,ko;q=0.9",
+    }
+
+
+def make_httpx_client(policy: RequestPolicy = FMK_POLICY) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         follow_redirects=True,
         timeout=httpx.Timeout(10.0, connect=5.0),
-        headers={
-            "User-Agent": "fmk-reader/0.1 personal read-only client",
-            "Accept-Language": "ko-KR,ko;q=0.9",
-        },
+        headers=_headers_for_policy(policy),
     )

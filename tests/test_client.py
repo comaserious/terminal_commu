@@ -1,10 +1,16 @@
 import asyncio
+from dataclasses import replace
 from email.utils import formatdate
 
 import httpx
 import pytest
 
-from fmk_reader.client import FmkHttpClient, make_httpx_client
+from fmk_reader.client import (
+    FMK_POLICY,
+    CommunityHttpClient,
+    FmkHttpClient,
+    make_httpx_client,
+)
 from fmk_reader.errors import AccessBlocked, FetchError, RateLimited
 
 
@@ -19,6 +25,84 @@ class FakeClock:
     async def sleep(self, delay: float) -> None:
         self.sleeps.append(delay)
         self.now += delay
+
+
+@pytest.mark.asyncio
+async def test_fmk_430_sets_cooldown_and_second_request_is_local() -> None:
+    requests: list[httpx.Request] = []
+    now = [100.0]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(430, headers={"Retry-After": "300"})
+
+    raw = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = CommunityHttpClient(
+        raw,
+        FMK_POLICY,
+        clock=lambda: now[0],
+    )
+    with pytest.raises(RateLimited) as first:
+        await client.get_text("https://www.fmkorea.com/football_world")
+    assert first.value.retry_after == "300"
+
+    now[0] += 1
+    with pytest.raises(RateLimited, match="299"):
+        await client.get_text("https://www.fmkorea.com/football_world")
+    assert len(requests) == 1
+    await raw.aclose()
+
+
+@pytest.mark.asyncio
+async def test_policy_rejects_redirect_outside_allowed_origins() -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            302,
+            headers={"Location": "https://example.com"},
+        )
+    )
+    async with httpx.AsyncClient(transport=transport) as raw:
+        client = CommunityHttpClient(raw, FMK_POLICY)
+        with pytest.raises(FetchError, match="cross-origin"):
+            await client.get_text("https://www.fmkorea.com/football_world")
+
+
+@pytest.mark.asyncio
+async def test_policy_controls_origin_headers_and_rate_limit_statuses() -> None:
+    requests: list[httpx.Request] = []
+    policy = replace(
+        FMK_POLICY,
+        user_agent="community-reader/test adapter",
+        allowed_origins=frozenset({("https", "community.test", 443)}),
+        rate_limit_statuses=frozenset({509}),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(509, headers={"Retry-After": "12"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw:
+        client = CommunityHttpClient(raw, policy)
+        with pytest.raises(RateLimited) as rate_limited:
+            await client.get_text("https://community.test/board")
+
+    assert rate_limited.value.site_name == "FMKorea"
+    assert rate_limited.value.retry_after == "12"
+    assert requests[0].headers["User-Agent"] == "community-reader/test adapter"
+
+
+@pytest.mark.asyncio
+async def test_make_httpx_client_uses_selected_policy_headers() -> None:
+    policy = replace(
+        FMK_POLICY,
+        user_agent="community-reader/test adapter",
+    )
+
+    raw_client = make_httpx_client(policy)
+    try:
+        assert raw_client.headers["User-Agent"] == "community-reader/test adapter"
+    finally:
+        await raw_client.aclose()
 
 
 @pytest.mark.asyncio
@@ -94,17 +178,24 @@ async def test_rate_limit_and_access_denial_map_to_typed_errors() -> None:
         with pytest.raises(RateLimited) as rate_limited:
             await client.get_text("https://www.fmkorea.com/rate-limited")
         assert requested_paths == ["/rate-limited"]
+        assert rate_limited.value.site_name == "FMKorea"
 
+        with pytest.raises(RateLimited, match="30"):
+            await client.get_text("https://www.fmkorea.com/forbidden")
+        assert requested_paths == ["/rate-limited"]
+
+        clock.now += 30
         with pytest.raises(AccessBlocked, match="FMKorea denied access"):
             await client.get_text("https://www.fmkorea.com/forbidden")
 
     assert rate_limited.value.retry_after == "30"
-    assert clock.sleeps == [30.0]
+    assert clock.sleeps == []
 
 
 @pytest.mark.asyncio
 async def test_http_date_retry_after_sets_monotonic_cooldown() -> None:
     wall_now = 1_700_000_000.0
+    requests: list[httpx.Request] = []
     responses = iter(
         [
             httpx.Response(
@@ -116,6 +207,7 @@ async def test_http_date_retry_after_sets_monotonic_cooldown() -> None:
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
         return next(responses)
 
     clock = FakeClock(10.0)
@@ -129,9 +221,14 @@ async def test_http_date_retry_after_sets_monotonic_cooldown() -> None:
 
         with pytest.raises(RateLimited):
             await client.get_text("https://www.fmkorea.com/rate-limited")
+        with pytest.raises(RateLimited, match="20"):
+            await client.get_text("https://www.fmkorea.com/next")
+        assert len(requests) == 1
+
+        clock.now += 20
         assert await client.get_text("https://www.fmkorea.com/next") == "ok"
 
-    assert clock.sleeps == [20.0]
+    assert clock.sleeps == []
 
 
 @pytest.mark.asyncio

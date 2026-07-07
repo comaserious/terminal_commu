@@ -74,7 +74,7 @@ async def test_expired_board_uses_stale_cache_after_rate_limit(
     cache: JsonCache,
     clock: list[float],
 ) -> None:
-    client = FakeClient(fixture("board.html"), RateLimited("30"))
+    client = FakeClient(fixture("board.html"), RateLimited("FMKorea", "30"))
     service = BoardService(client, cache)
     expected = (await service.load_board(1)).value
     clock[0] = 161.0
@@ -239,7 +239,7 @@ async def test_cached_body_is_fallback_with_empty_requested_comment_page(
     [
         FetchError("offline"),
         AccessBlocked("blocked"),
-        RateLimited("30"),
+        RateLimited("FMKorea", "30"),
     ],
 )
 async def test_fetch_failures_propagate_without_any_post_cache(

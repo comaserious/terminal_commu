@@ -15,8 +15,12 @@ class FetchError(ReaderError):
 
 
 class RateLimited(FetchError):
-    def __init__(self, retry_after: str | None = None) -> None:
-        super().__init__("FMKorea request was rate limited")
+    def __init__(self, site_name: str, retry_after: str | None = None) -> None:
+        message = f"{site_name} 요청 제한"
+        if retry_after:
+            message += f" (Retry-After: {retry_after})"
+        super().__init__(message)
+        self.site_name = site_name
         self.retry_after = retry_after
 
 
