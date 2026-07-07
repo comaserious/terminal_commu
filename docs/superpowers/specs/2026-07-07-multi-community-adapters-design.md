@@ -30,8 +30,8 @@ by text placeholders and are never downloaded for display.
 
 ## Command and startup experience
 
-`commu` becomes the documented command. The existing `fmk` entry point remains
-as an undocumented compatibility alias for existing installations.
+`commu` becomes the primary documented command. The existing `fmk` entry point
+remains as a documented compatibility alias for existing installations.
 
 Running `commu` without arguments opens a keyboard-driven launcher:
 
