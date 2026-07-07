@@ -14,6 +14,7 @@ import fmk_reader.app as app_module
 from fmk_reader.adapters import adapter_for
 from fmk_reader.app import CommunityReaderApp, FmkReaderApp, ReaderResources
 from fmk_reader.errors import ReaderError
+from fmk_reader.launcher import LauncherScreen
 from fmk_reader.models import Comment, PageResult, PostDetail, PostSummary
 from fmk_reader.service import DataSource, LoadResult, PostPage
 from fmk_reader.targets import CommunityTarget, route_url
@@ -327,6 +328,19 @@ class SwitchFactory:
         return ReaderResources(raw, cache, adapter_for(target), FakeService())
 
 
+class CleanupNoticeApp(CommunityReaderApp):
+    def __init__(
+        self,
+        target: CommunityTarget,
+        resource_factory: SwitchFactory,
+    ) -> None:
+        self.notices: list[str] = []
+        super().__init__(target=target, resource_factory=resource_factory)
+
+    def notify(self, message: str, **_: object) -> None:
+        self.notices.append(message)
+
+
 async def test_switch_site_closes_resources_clears_reader_and_reopens_launcher() -> None:
     factory = SwitchFactory()
     first = route_url("https://www.fmkorea.com/football_world")
@@ -347,6 +361,70 @@ async def test_switch_site_closes_resources_clears_reader_and_reopens_launcher()
         assert app.current_post is None
         assert widget_text(app.default_screen.query_one("#article-content", Static)) == ""
         assert app.query_one("#launcher-sites", OptionList).display
+
+
+@pytest.mark.parametrize("failing_resource", ["raw", "cache"])
+async def test_failed_switch_cleanup_is_retryable_without_nested_launcher(
+    failing_resource: str,
+) -> None:
+    events: list[str] = []
+
+    class FlakyRaw(SwitchRawClient):
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            events.append("raw")
+            if failing_resource == "raw" and self.close_calls == 1:
+                raise RuntimeError("raw close failed")
+
+    class FlakyCache(SwitchCache):
+        def close(self) -> None:
+            self.close_calls += 1
+            events.append("cache")
+            if failing_resource == "cache" and self.close_calls == 1:
+                raise RuntimeError("cache close failed")
+
+    class FlakyFactory(SwitchFactory):
+        def __call__(self, target: CommunityTarget) -> ReaderResources:
+            raw = FlakyRaw()
+            cache = FlakyCache()
+            self.created.append(target)
+            self.raw_clients.append(raw)
+            self.caches.append(cache)
+            return ReaderResources(raw, cache, adapter_for(target), FakeService())
+
+    factory = FlakyFactory()
+    target = route_url("https://www.fmkorea.com/football_world")
+    app = CleanupNoticeApp(target, factory)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        raw = factory.raw_clients[0]
+        cache = factory.caches[0]
+
+        await pilot.press("s")
+        await pilot.pause()
+
+        assert events == ["raw", "cache"]
+        assert app.target == target
+        assert app.raw_client is raw
+        assert app.cache is cache
+        assert app._owns_resources
+        assert app.screen is app.default_screen
+        assert len(factory.created) == 1
+        assert app.notices == [f"리소스를 닫는 중 오류가 발생했습니다: {failing_resource} close failed"]
+
+        await pilot.press("s")
+        await pilot.pause()
+
+        assert app.target is None
+        assert isinstance(app.screen, LauncherScreen)
+        assert len(factory.created) == 1
+        if failing_resource == "raw":
+            assert raw.close_calls == 2
+            assert cache.close_calls == 1
+        else:
+            assert raw.close_calls == 1
+            assert cache.close_calls == 2
 
 
 async def test_mount_loads_board_focuses_list_and_shows_source() -> None:
@@ -711,12 +789,16 @@ async def test_cache_closes_when_http_client_close_raises(
 async def test_resource_factory_closes_partial_resources_on_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    events: list[str] = []
+
     class RawClient:
         def __init__(self) -> None:
             self.close_calls = 0
 
         async def aclose(self) -> None:
             self.close_calls += 1
+            events.append("raw")
+            raise RuntimeError("raw cleanup failed")
 
     class Cache:
         def __init__(self) -> None:
@@ -724,6 +806,8 @@ async def test_resource_factory_closes_partial_resources_on_failure(
 
         def close(self) -> None:
             self.close_calls += 1
+            events.append("cache")
+            raise RuntimeError("cache cleanup failed")
 
     raw = RawClient()
     cache = Cache()
@@ -738,14 +822,20 @@ async def test_resource_factory_closes_partial_resources_on_failure(
         lambda client, policy: object(),
     )
 
+    original = ValueError("service construction failed")
+
     def fail_service(*args: object) -> None:
-        raise RuntimeError("service construction failed")
+        raise original
 
     monkeypatch.setattr(app_module, "CommunityService", fail_service)
 
-    with pytest.raises(RuntimeError, match="service construction failed"):
-        app_module.create_reader_resources(target)
-    await asyncio.sleep(0)
+    tasks_before = set(asyncio.all_tasks())
+    with pytest.raises(ValueError, match="service construction failed") as raised:
+        await app_module.create_reader_resources(target)
+    tasks_after = set(asyncio.all_tasks())
 
+    assert raised.value is original
+    assert events == ["raw", "cache"]
     assert raw.close_calls == 1
     assert cache.close_calls == 1
+    assert tasks_after == tasks_before

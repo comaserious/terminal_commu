@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
-from collections.abc import Sequence
+from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
+import inspect
 from pathlib import Path
 import sys
 from typing import Protocol
@@ -46,10 +46,12 @@ class ReaderResources:
 
 
 class ResourceFactory(Protocol):
-    def __call__(self, target: CommunityTarget) -> ReaderResources: ...
+    def __call__(
+        self, target: CommunityTarget
+    ) -> ReaderResources | Awaitable[ReaderResources]: ...
 
 
-def create_reader_resources(target: CommunityTarget) -> ReaderResources:
+async def create_reader_resources(target: CommunityTarget) -> ReaderResources:
     adapter = adapter_for(target)
     cache: JsonCache | None = None
     raw_client: httpx.AsyncClient | None = None
@@ -62,28 +64,21 @@ def create_reader_resources(target: CommunityTarget) -> ReaderResources:
             cache,
         )
         return ReaderResources(raw_client, cache, adapter, service)
-    except BaseException:
-        if cache is not None:
-            cache.close()
+    except BaseException as original_error:
+        cleanup_errors: list[BaseException] = []
         if raw_client is not None:
-            _close_failed_client(raw_client)
+            try:
+                await raw_client.aclose()
+            except BaseException as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+        if cache is not None:
+            try:
+                cache.close()
+            except BaseException as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+        for cleanup_error in cleanup_errors:
+            original_error.add_note(f"Cleanup error: {cleanup_error}")
         raise
-
-
-async def _quietly_close_client(raw_client: httpx.AsyncClient) -> None:
-    try:
-        await raw_client.aclose()
-    except Exception:
-        pass
-
-
-def _close_failed_client(raw_client: httpx.AsyncClient) -> None:
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        asyncio.run(_quietly_close_client(raw_client))
-    else:
-        loop.create_task(_quietly_close_client(raw_client))
 
 
 class PostItem(ListItem):
@@ -133,6 +128,8 @@ class CommunityReaderApp(App[None]):
         self.adapter: CommunityAdapter | None = None
         self._resource_factory = resource_factory or create_reader_resources
         self._owns_resources = False
+        self._raw_client_closed = False
+        self._cache_closed = False
         self.service = service
 
         self.board_page = 1
@@ -148,6 +145,7 @@ class CommunityReaderApp(App[None]):
         self._pending_board_page: int | None = None
         self._pending_post_key: tuple[str, int] | None = None
         self._direct_start = False
+        self._switch_in_progress = False
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -163,31 +161,35 @@ class CommunityReaderApp(App[None]):
                 yield Static("", id="article-content", markup=False)
         yield Footer()
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         self._sync_layout(self.size.width)
         self.query_one("#post-list", ListView).focus()
         if self.target is None:
             self.push_screen(LauncherScreen(), self._accept_target)
             return
-        self._activate_target(self.target)
+        await self._activate_target(self.target)
 
     async def on_unmount(self) -> None:
         await self._release_owned_resources()
 
-    def _accept_target(self, target: CommunityTarget | None) -> None:
+    async def _accept_target(self, target: CommunityTarget | None) -> None:
         if target is None:
             return
         self.target = target
-        self._activate_target(target)
+        await self._activate_target(target)
 
-    def _activate_target(self, target: CommunityTarget) -> None:
+    async def _activate_target(self, target: CommunityTarget) -> None:
         if self.service is None:
             resources = self._resource_factory(target)
+            if inspect.isawaitable(resources):
+                resources = await resources
             self.raw_client = resources.raw_client
             self.cache = resources.cache
             self.adapter = resources.adapter
             self.service = resources.service
             self._owns_resources = True
+            self._raw_client_closed = False
+            self._cache_closed = False
         elif self.adapter is None:
             self.adapter = adapter_for(target)
         direct_post = self.adapter.direct_post()
@@ -208,17 +210,31 @@ class CommunityReaderApp(App[None]):
     async def _release_owned_resources(self) -> None:
         if not self._owns_resources:
             return
-        raw_client = self.raw_client
-        cache = self.cache
+        errors: list[BaseException] = []
+        if not self._raw_client_closed:
+            try:
+                if self.raw_client is not None:
+                    await self.raw_client.aclose()
+            except BaseException as error:
+                errors.append(error)
+            else:
+                self._raw_client_closed = True
+        if not self._cache_closed:
+            try:
+                if self.cache is not None:
+                    self.cache.close()
+            except BaseException as error:
+                errors.append(error)
+            else:
+                self._cache_closed = True
+        if errors:
+            first_error = errors[0]
+            for secondary_error in errors[1:]:
+                first_error.add_note(f"Additional cleanup error: {secondary_error}")
+            raise first_error
         self.raw_client = None
         self.cache = None
         self._owns_resources = False
-        try:
-            if raw_client is not None:
-                await raw_client.aclose()
-        finally:
-            if cache is not None:
-                cache.close()
 
     def load_board(
         self,
@@ -402,6 +418,8 @@ class CommunityReaderApp(App[None]):
         )
 
     def action_previous_page(self) -> None:
+        if not self._reader_is_active():
+            return
         if self.query_one("#post-list", ListView).has_focus:
             if self.board_has_previous:
                 self.load_board(target_page=self.board_page - 1)
@@ -413,6 +431,8 @@ class CommunityReaderApp(App[None]):
             self.load_post(target_page=self.comment_page - 1)
 
     def action_next_page(self) -> None:
+        if not self._reader_is_active():
+            return
         if self.query_one("#post-list", ListView).has_focus:
             if self.board_has_next:
                 self.load_board(target_page=self.board_page + 1)
@@ -425,6 +445,8 @@ class CommunityReaderApp(App[None]):
             self.load_post(target_page=self.comment_page + 1)
 
     def action_refresh(self) -> None:
+        if not self._reader_is_active():
+            return
         if (
             self.current_post is not None
             and self.query_one("#article-pane", ArticlePane).has_focus
@@ -434,6 +456,8 @@ class CommunityReaderApp(App[None]):
             self.load_board(refresh=True)
 
     def action_back(self) -> None:
+        if not self._reader_is_active():
+            return
         self.query_one("#main", Horizontal).remove_class("reading")
         self.query_one("#post-list", ListView).focus()
         if self._direct_start:
@@ -442,6 +466,15 @@ class CommunityReaderApp(App[None]):
             self.load_board()
 
     async def action_switch_site(self) -> None:
+        if not self._reader_is_active() or self._switch_in_progress:
+            return
+        self._switch_in_progress = True
+        try:
+            await self._switch_site()
+        finally:
+            self._switch_in_progress = False
+
+    async def _switch_site(self) -> None:
         self.workers.cancel_all()
         await self.workers.wait_for_complete()
         try:
@@ -452,6 +485,7 @@ class CommunityReaderApp(App[None]):
                 severity="error",
                 markup=False,
             )
+            return
 
         self.target = None
         self.adapter = None
@@ -464,6 +498,9 @@ class CommunityReaderApp(App[None]):
         self.query_one("#main", Horizontal).remove_class("reading")
         self.sub_title = ""
         self.push_screen(LauncherScreen(), self._accept_target)
+
+    def _reader_is_active(self) -> bool:
+        return self.screen is self.default_screen
 
     def _reset_reader_state(self) -> None:
         self.board_page = 1
