@@ -7,14 +7,23 @@ from pathlib import Path
 
 import pytest
 
+from fmk_reader.adapters.base import RequestPolicy
 from fmk_reader.cache import JsonCache
 from fmk_reader.errors import AccessBlocked, FetchError, ParseError, RateLimited
-from fmk_reader.models import Comment, PageResult, PostSummary
+from fmk_reader.models import Comment, PageResult, PostDetail, PostSummary
 from fmk_reader.parser import parse_board, parse_post
-from fmk_reader.service import BOARD_URL, BoardService, DataSource, PostPage
+from fmk_reader.service import (
+    BOARD_URL,
+    BoardService,
+    CommunityService,
+    DataSource,
+    PostPage,
+)
+from fmk_reader.targets import CommunityTarget, Site
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
+FMK_CACHE_PREFIX = "v2:fmkorea:football_world"
 
 
 def fixture(name: str) -> str:
@@ -32,6 +41,201 @@ class FakeClient:
         if isinstance(result, Exception):
             raise result
         return result
+
+
+class FakeAdapter:
+    def __init__(
+        self,
+        target: CommunityTarget,
+        *,
+        parsed_post_id: str | None = None,
+    ) -> None:
+        self.target = target
+        self.policy = RequestPolicy(
+            site=target.site,
+            user_agent="fake-reader",
+            allowed_origins=frozenset(),
+            rate_limit_statuses=frozenset(),
+        )
+        self.site_name = target.site.display_name
+        self.parsed_post_id = parsed_post_id
+        self.board_parse_calls: list[tuple[str, int]] = []
+        self.post_parse_calls: list[tuple[str, PostSummary, int]] = []
+
+    def board_url(self, page: int) -> str:
+        return (
+            self.target.board_url
+            if page == 1
+            else f"{self.target.board_url}?page={page}"
+        )
+
+    def post_url(self, post: PostSummary, cpage: int) -> str:
+        return f"{self.target.board_url}/{post.post_id}?comments={cpage}"
+
+    def direct_post(self) -> PostSummary | None:
+        return None
+
+    def parse_board(self, html: str, page: int) -> PageResult[PostSummary]:
+        self.board_parse_calls.append((html, page))
+        return PageResult(
+            items=(self._post("42"),),
+            page=page,
+            has_previous=page > 1,
+            has_next=False,
+        )
+
+    def parse_post(
+        self,
+        html: str,
+        post: PostSummary,
+        cpage: int,
+    ) -> tuple[PostDetail, PageResult[Comment]]:
+        self.post_parse_calls.append((html, post, cpage))
+        summary = self._post(self.parsed_post_id or post.post_id)
+        return (
+            PostDetail(summary=summary, body=html, links=()),
+            PageResult(
+                items=(),
+                page=cpage,
+                has_previous=cpage > 1,
+                has_next=False,
+            ),
+        )
+
+    def _post(self, post_id: str) -> PostSummary:
+        return PostSummary(
+            post_id=post_id,
+            title="테스트 글",
+            category="",
+            author="작성자",
+            created_at="오늘",
+            views="1",
+            votes=0,
+            comment_count=0,
+            url=f"{self.target.board_url.rstrip('/')}/{post_id}",
+            is_notice=False,
+        )
+
+
+async def seed_post(
+    service: CommunityService,
+    post_id: str,
+) -> PostSummary:
+    post = PostSummary(
+        post_id=post_id,
+        title="테스트 글",
+        category="",
+        author="작성자",
+        created_at="오늘",
+        views="1",
+        votes=0,
+        comment_count=0,
+        url=f"{service.adapter.target.board_url.rstrip('/')}/{post_id}",
+        is_notice=False,
+    )
+    await service.load_post(post)
+    return post
+
+
+async def test_service_uses_adapter_urls_and_site_namespaced_cache(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeAdapter(
+        CommunityTarget(
+            site=Site.ARCA,
+            board_id="rogersfu",
+            board_url="https://arca.live/b/rogersfu",
+        )
+    )
+    client = FakeClient("<board />")
+    cache = JsonCache(tmp_path / "cache.db")
+    service = CommunityService(adapter, client, cache)
+
+    result = await service.load_board(2)
+
+    assert client.urls == [adapter.board_url(2)]
+    assert adapter.board_parse_calls == [("<board />", 2)]
+    assert result.source is DataSource.NETWORK
+    assert cache.get("v2:arca:rogersfu:board:2", 60) is not None
+    cache.close()
+
+
+async def test_same_article_id_on_two_sites_has_distinct_cache_keys(
+    tmp_path: Path,
+) -> None:
+    cache = JsonCache(tmp_path / "cache.db")
+    dc_adapter = FakeAdapter(
+        CommunityTarget(Site.DCINSIDE, "g", "https://m.dcinside.com/board/g")
+    )
+    arca_adapter = FakeAdapter(CommunityTarget(Site.ARCA, "g", "https://arca.live/b/g"))
+    dc_client = FakeClient("dc")
+    arca_client = FakeClient("arca")
+
+    dc_post = await seed_post(CommunityService(dc_adapter, dc_client, cache), "42")
+    arca_post = await seed_post(
+        CommunityService(arca_adapter, arca_client, cache), "42"
+    )
+
+    assert dc_client.urls == [dc_adapter.post_url(dc_post, 1)]
+    assert arca_client.urls == [arca_adapter.post_url(arca_post, 1)]
+    assert dc_adapter.post_parse_calls == [("dc", dc_post, 1)]
+    assert arca_adapter.post_parse_calls == [("arca", arca_post, 1)]
+    assert cache.get("v2:dcinside:g:post:42:comments:1", 120) is not None
+    assert cache.get("v2:arca:g:post:42:comments:1", 120) is not None
+    cache.close()
+
+
+async def test_service_rejects_adapter_post_id_mismatch_before_cache_writes(
+    tmp_path: Path,
+) -> None:
+    cache = JsonCache(tmp_path / "cache.db")
+    adapter = FakeAdapter(
+        CommunityTarget(Site.ARCA, "g", "https://arca.live/b/g"),
+        parsed_post_id="999",
+    )
+    service = CommunityService(adapter, FakeClient("mismatch"), cache)
+
+    with pytest.raises(ParseError, match="post id mismatch"):
+        await seed_post(service, "42")
+
+    assert cache.get("v2:arca:g:post:42:comments:1", 120) is None
+    assert cache.get("v2:arca:g:post:42:body", 1800) is None
+    cache.close()
+
+
+async def test_rate_limit_stale_warning_uses_adapter_site_and_retry_after(
+    cache: JsonCache,
+    clock: list[float],
+) -> None:
+    adapter = FakeAdapter(CommunityTarget(Site.ARCA, "g", "https://arca.live/b/g"))
+    client = FakeClient("fresh", RateLimited("wrong site", "45"))
+    service = CommunityService(adapter, client, cache)
+    await service.load_board(1)
+    clock[0] = 161.0
+
+    result = await service.load_board(1)
+
+    assert adapter.site_name in result.warning
+    assert "wrong site" not in result.warning
+    assert "Retry-After: 45" in result.warning
+
+
+async def test_fetch_error_stale_warning_includes_typed_error_text(
+    cache: JsonCache,
+    clock: list[float],
+) -> None:
+    adapter = FakeAdapter(
+        CommunityTarget(Site.DCINSIDE, "g", "https://m.dcinside.com/board/g")
+    )
+    client = FakeClient("fresh", FetchError("socket closed"))
+    service = CommunityService(adapter, client, cache)
+    await service.load_board(1)
+    clock[0] = 161.0
+
+    result = await service.load_board(1)
+
+    assert "socket closed" in result.warning
+    assert "현재 커뮤니티에 연결할 수 없어" in result.warning
 
 
 @pytest.fixture
@@ -151,9 +355,9 @@ async def test_load_post_uses_exact_url_and_caches_combined_and_body(
     assert result.source is DataSource.NETWORK
     assert client.urls == [expected_url]
     combined = cache.get(
-        f"post:{post.post_id}:comments:{cpage}", ttl=120.0
+        f"{FMK_CACHE_PREFIX}:post:{post.post_id}:comments:{cpage}", ttl=120.0
     )
-    body = cache.get(f"post:{post.post_id}:body", ttl=1800.0)
+    body = cache.get(f"{FMK_CACHE_PREFIX}:post:{post.post_id}:body", ttl=1800.0)
     assert combined is not None
     assert combined.value == result.value.to_dict()
     assert body is not None
@@ -178,9 +382,7 @@ async def test_load_post_rejects_mismatched_response_before_cache_write(
 ) -> None:
     post = board_post()
     valid_html = fixture("post.html")
-    mismatched_html = valid_html.replace(
-        'data-docSrl="100"', 'data-docSrl="999"', 1
-    )
+    mismatched_html = valid_html.replace('data-docSrl="100"', 'data-docSrl="999"', 1)
     client = FakeClient(valid_html, mismatched_html)
     service = BoardService(client, cache)
     original = await service.load_post(post)
@@ -188,8 +390,10 @@ async def test_load_post_rejects_mismatched_response_before_cache_write(
     with pytest.raises(ParseError, match="post id mismatch"):
         await service.load_post(post, refresh=True)
 
-    combined = cache.get(f"post:{post.post_id}:comments:1", ttl=120.0)
-    body = cache.get(f"post:{post.post_id}:body", ttl=1800.0)
+    combined = cache.get(
+        f"{FMK_CACHE_PREFIX}:post:{post.post_id}:comments:1", ttl=120.0
+    )
+    body = cache.get(f"{FMK_CACHE_PREFIX}:post:{post.post_id}:body", ttl=1800.0)
     assert combined is not None
     assert combined.value == original.value.to_dict()
     assert body is not None
@@ -272,7 +476,7 @@ async def test_malformed_strict_board_cache_is_a_miss_and_gets_replaced(
     cache: JsonCache,
 ) -> None:
     cache.put(
-        "board:1",
+        f"{FMK_CACHE_PREFIX}:board:1",
         {
             "items": [],
             "page": "not-an-integer",

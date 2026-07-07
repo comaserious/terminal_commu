@@ -4,10 +4,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Generic, Protocol, TypeVar
 
+from fmk_reader.adapters.base import CommunityAdapter
+from fmk_reader.adapters.fmk import FmkAdapter
 from fmk_reader.cache import JsonCache
 from fmk_reader.errors import FetchError, ParseError, RateLimited
 from fmk_reader.models import Comment, PageResult, PostDetail, PostSummary
-from fmk_reader.parser import parse_board, parse_post
+from fmk_reader.targets import route_url
 
 
 BOARD_URL = "https://www.fmkorea.com/football_world"
@@ -60,9 +62,7 @@ class PostPage:
                 details.append(f"missing {', '.join(sorted(missing))}")
             if unexpected:
                 details.append(f"unexpected {', '.join(sorted(unexpected))}")
-            raise ValueError(
-                f"PostPage has invalid fields: {'; '.join(details)}"
-            )
+            raise ValueError(f"PostPage has invalid fields: {'; '.join(details)}")
 
         detail = value["detail"]
         comments = value["comments"]
@@ -76,29 +76,33 @@ class PostPage:
         )
 
 
-class BoardService:
-    def __init__(self, client: TextClient, cache: JsonCache) -> None:
+class CommunityService:
+    def __init__(
+        self,
+        adapter: CommunityAdapter,
+        client: TextClient,
+        cache: JsonCache,
+    ) -> None:
+        self.adapter = adapter
         self._client = client
         self._cache = cache
+
+    def _key(self, *parts: object) -> str:
+        prefix = f"v2:{self.adapter.target.site.value}:{self.adapter.target.board_id}"
+        return ":".join((prefix, *(str(part) for part in parts)))
 
     async def load_board(
         self, page: int, refresh: bool = False
     ) -> LoadResult[PageResult[PostSummary]]:
-        key = f"board:{page}"
+        key = self._key("board", page)
         if not refresh:
             cached = self._cached_board(key, allow_stale=False)
             if cached is not None:
                 return LoadResult(value=cached, source=DataSource.CACHE)
 
-        url = (
-            BOARD_URL
-            if page == 1
-            else "https://www.fmkorea.com/index.php"
-            f"?mid=football_world&page={page}"
-        )
         try:
-            html = await self._client.get_text(url)
-            board = parse_board(html, page=page)
+            html = await self._client.get_text(self.adapter.board_url(page))
+            board = self.adapter.parse_board(html, page)
         except FetchError as exc:
             stale = self._cached_board(key, allow_stale=True)
             if stale is None:
@@ -106,7 +110,7 @@ class BoardService:
             return LoadResult(
                 value=stale,
                 source=DataSource.STALE_CACHE,
-                warning=_stale_warning(exc, "게시판"),
+                warning=_stale_warning(exc, "게시판", self.adapter.site_name),
             )
 
         self._cache.put(key, board.to_dict())
@@ -118,33 +122,29 @@ class BoardService:
         cpage: int = 1,
         refresh: bool = False,
     ) -> LoadResult[PostPage]:
-        combined_key = f"post:{post.post_id}:comments:{cpage}"
-        body_key = f"post:{post.post_id}:body"
+        combined_key = self._key("post", post.post_id, "comments", cpage)
+        body_key = self._key("post", post.post_id, "body")
         if not refresh:
             cached = self._cached_post_page(combined_key, allow_stale=False)
             if cached is not None:
                 return LoadResult(value=cached, source=DataSource.CACHE)
 
-        url = (
-            post.url
-            if cpage == 1
-            else "https://www.fmkorea.com/index.php"
-            f"?mid=football_world&document_srl={post.post_id}&cpage={cpage}"
-        )
         try:
-            html = await self._client.get_text(url)
-            detail, comments = parse_post(html, post.url, cpage=cpage)
+            html = await self._client.get_text(self.adapter.post_url(post, cpage))
+            detail, comments = self.adapter.parse_post(html, post, cpage)
             if detail.summary.post_id != post.post_id:
                 raise ParseError("post id mismatch")
         except FetchError as exc:
-            stale_page = self._cached_post_page(
-                combined_key, allow_stale=True
-            )
+            stale_page = self._cached_post_page(combined_key, allow_stale=True)
             if stale_page is not None:
                 return LoadResult(
                     value=stale_page,
                     source=DataSource.STALE_CACHE,
-                    warning=_stale_warning(exc, "게시글과 댓글"),
+                    warning=_stale_warning(
+                        exc,
+                        "게시글과 댓글",
+                        self.adapter.site_name,
+                    ),
                 )
 
             stale_body = self._cached_post_body(body_key)
@@ -159,7 +159,11 @@ class BoardService:
             return LoadResult(
                 value=PostPage(detail=stale_body, comments=empty_comments),
                 source=DataSource.STALE_CACHE,
-                warning=_stale_warning(exc, "게시글 본문"),
+                warning=_stale_warning(
+                    exc,
+                    "게시글 본문",
+                    self.adapter.site_name,
+                ),
             )
 
         result = PostPage(detail=detail, comments=comments)
@@ -178,9 +182,7 @@ class BoardService:
         except (TypeError, ValueError):
             return None
 
-    def _cached_post_page(
-        self, key: str, *, allow_stale: bool
-    ) -> PostPage | None:
+    def _cached_post_page(self, key: str, *, allow_stale: bool) -> PostPage | None:
         hit = self._cache.get(key, COMMENTS_TTL, allow_stale=allow_stale)
         if hit is None:
             return None
@@ -199,11 +201,22 @@ class BoardService:
             return None
 
 
-def _stale_warning(error: FetchError, subject: str) -> str:
-    if isinstance(error, RateLimited) and error.retry_after is not None:
-        return (
-            "요청 제한으로 "
-            f"{subject}의 저장된 내용을 표시합니다 "
-            f"(Retry-After: {error.retry_after})."
-        )
-    return f"네트워크 오류로 {subject}의 저장된 내용을 표시합니다."
+class BoardService(CommunityService):
+    def __init__(self, client: TextClient, cache: JsonCache) -> None:
+        target = route_url(BOARD_URL)
+        super().__init__(FmkAdapter(target), client, cache)
+
+
+def _stale_warning(
+    error: FetchError,
+    subject: str,
+    site_name: str,
+) -> str:
+    if isinstance(error, RateLimited):
+        reason = f"{site_name} 요청 제한"
+        if error.retry_after is not None:
+            reason += f" (Retry-After: {error.retry_after})"
+        return f"{reason}으로 {subject}의 저장된 내용을 표시합니다."
+    return (
+        f"{error}: 현재 커뮤니티에 연결할 수 없어 {subject}의 저장된 내용을 표시합니다."
+    )
