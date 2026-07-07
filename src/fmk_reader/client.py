@@ -3,7 +3,6 @@ import math
 import time
 from collections.abc import Awaitable, Callable
 from email.utils import parsedate_to_datetime
-from typing import Any
 
 import httpx
 from bs4 import BeautifulSoup
@@ -214,11 +213,6 @@ class CommunityHttpClient:
 
         if delay > 0:
             self._retry_not_before = self._clock() + delay
-
-
-class FmkHttpClient(CommunityHttpClient):
-    def __init__(self, raw: httpx.AsyncClient, **kwargs: Any) -> None:
-        super().__init__(raw, FMK_POLICY, **kwargs)
 
 
 def _headers_for_policy(policy: RequestPolicy) -> dict[str, str]:

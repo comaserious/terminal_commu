@@ -8,7 +8,6 @@ import pytest
 from fmk_reader.client import (
     FMK_POLICY,
     CommunityHttpClient,
-    FmkHttpClient,
     make_httpx_client,
 )
 from fmk_reader.errors import AccessBlocked, FetchError, RateLimited
@@ -112,7 +111,7 @@ async def test_min_interval_must_be_finite_and_non_negative(
 ) -> None:
     async with httpx.AsyncClient() as raw_client:
         with pytest.raises(ValueError, match="min_interval"):
-            FmkHttpClient(raw_client, min_interval=min_interval)
+            CommunityHttpClient(raw_client, FMK_POLICY, min_interval=min_interval)
 
 
 @pytest.mark.asyncio
@@ -123,7 +122,7 @@ async def test_sequential_requests_are_spaced_from_their_start_times() -> None:
         return httpx.Response(200, text=request.url.path)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
-        client = FmkHttpClient(raw_client, clock=clock, sleep=clock.sleep)
+        client = CommunityHttpClient(raw_client, FMK_POLICY, clock=clock, sleep=clock.sleep)
 
         first = await client.get_text("https://www.fmkorea.com/first")
         second = await client.get_text("https://www.fmkorea.com/second")
@@ -147,7 +146,7 @@ async def test_early_returning_sleeper_cannot_bypass_spacing() -> None:
         clock.sleeps.append(delay)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
-        client = FmkHttpClient(raw_client, clock=clock, sleep=early_sleep)
+        client = CommunityHttpClient(raw_client, FMK_POLICY, clock=clock, sleep=early_sleep)
 
         assert await client.get_text("https://www.fmkorea.com/first") == "ok"
         with pytest.raises(FetchError, match="spacing"):
@@ -173,7 +172,7 @@ async def test_rate_limit_and_access_denial_map_to_typed_errors() -> None:
 
     clock = FakeClock(10.0)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
-        client = FmkHttpClient(raw_client, clock=clock, sleep=clock.sleep)
+        client = CommunityHttpClient(raw_client, FMK_POLICY, clock=clock, sleep=clock.sleep)
 
         with pytest.raises(RateLimited) as rate_limited:
             await client.get_text("https://www.fmkorea.com/rate-limited")
@@ -212,8 +211,9 @@ async def test_http_date_retry_after_sets_monotonic_cooldown() -> None:
 
     clock = FakeClock(10.0)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
-        client = FmkHttpClient(
+        client = CommunityHttpClient(
             raw_client,
+            FMK_POLICY,
             clock=clock,
             sleep=clock.sleep,
             wall_clock=lambda: wall_now,
@@ -251,8 +251,9 @@ async def test_invalid_or_past_retry_after_uses_normal_spacing(
 
     clock = FakeClock(10.0)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
-        client = FmkHttpClient(
+        client = CommunityHttpClient(
             raw_client,
+            FMK_POLICY,
             clock=clock,
             sleep=clock.sleep,
             wall_clock=lambda: 1_700_000_000.0,
@@ -280,7 +281,7 @@ async def test_overflowing_retry_after_is_ignored_without_masking_rate_limit() -
 
     clock = FakeClock(10.0)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
-        client = FmkHttpClient(raw_client, clock=clock, sleep=clock.sleep)
+        client = CommunityHttpClient(raw_client, FMK_POLICY, clock=clock, sleep=clock.sleep)
 
         with pytest.raises(RateLimited) as rate_limited:
             await client.get_text("https://www.fmkorea.com/rate-limited")
@@ -305,7 +306,7 @@ async def test_transport_errors_map_to_fetch_error(
         raise error_type("network failure", request=request)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
-        client = FmkHttpClient(raw_client)
+        client = CommunityHttpClient(raw_client, FMK_POLICY)
 
         with pytest.raises(FetchError, match=message):
             await client.get_text("https://www.fmkorea.com/post")
@@ -328,7 +329,7 @@ async def test_http_status_error_preserves_status_and_clears_cookies() -> None:
         transport=httpx.MockTransport(handler),
         cookies={"session": "secret"},
     ) as raw_client:
-        client = FmkHttpClient(raw_client)
+        client = CommunityHttpClient(raw_client, FMK_POLICY)
 
         with pytest.raises(FetchError, match="FMKorea returned HTTP 502"):
             await client.get_text("https://www.fmkorea.com/post")
@@ -343,7 +344,7 @@ async def test_other_http_error_maps_to_fetch_error_with_status() -> None:
         return httpx.Response(500, text="server error")
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
-        client = FmkHttpClient(raw_client)
+        client = CommunityHttpClient(raw_client, FMK_POLICY)
 
         with pytest.raises(FetchError, match="FMKorea returned HTTP 500"):
             await client.get_text("https://www.fmkorea.com/post")
@@ -362,7 +363,7 @@ async def test_article_text_mentioning_challenges_is_returned(body: str) -> None
         return httpx.Response(200, text=body)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
-        client = FmkHttpClient(raw_client)
+        client = CommunityHttpClient(raw_client, FMK_POLICY)
 
         assert await client.get_text("https://www.fmkorea.com/post") == body
 
@@ -378,7 +379,7 @@ async def test_article_title_mentioning_captcha_is_returned() -> None:
         return httpx.Response(200, text=body)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
-        client = FmkHttpClient(raw_client)
+        client = CommunityHttpClient(raw_client, FMK_POLICY)
 
         assert await client.get_text("https://www.fmkorea.com/post") == body
 
@@ -392,7 +393,7 @@ async def test_exact_known_challenge_titles_are_blocked(title: str) -> None:
         return httpx.Response(200, text=body)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
-        client = FmkHttpClient(raw_client)
+        client = CommunityHttpClient(raw_client, FMK_POLICY)
 
         with pytest.raises(AccessBlocked, match="FMKorea returned a challenge page"):
             await client.get_text("https://www.fmkorea.com/post")
@@ -413,7 +414,7 @@ async def test_structural_challenge_page_maps_to_access_blocked(body: str) -> No
         return httpx.Response(200, text=body)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
-        client = FmkHttpClient(raw_client)
+        client = CommunityHttpClient(raw_client, FMK_POLICY)
 
         with pytest.raises(AccessBlocked, match="FMKorea returned a challenge page"):
             await client.get_text("https://www.fmkorea.com/post")
@@ -429,7 +430,7 @@ async def test_response_cookies_are_neither_stored_nor_sent() -> None:
         return httpx.Response(200, headers=headers, text="ok")
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
-        client = FmkHttpClient(raw_client, min_interval=0)
+        client = CommunityHttpClient(raw_client, FMK_POLICY, min_interval=0)
 
         await client.get_text("https://www.fmkorea.com/first")
         await client.get_text("https://www.fmkorea.com/second")
@@ -459,7 +460,7 @@ async def test_redirects_neither_store_nor_forward_cookies() -> None:
         follow_redirects=True,
         headers={"Cookie": "default=secret"},
     ) as raw_client:
-        client = FmkHttpClient(raw_client, min_interval=0)
+        client = CommunityHttpClient(raw_client, FMK_POLICY, min_interval=0)
 
         assert await client.get_text("https://www.fmkorea.com/start") == "done"
 
@@ -479,7 +480,7 @@ async def test_each_redirect_hop_is_spaced_from_the_previous_start() -> None:
         return httpx.Response(200, text="done")
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw:
-        client = FmkHttpClient(raw, clock=clock, sleep=clock.sleep)
+        client = CommunityHttpClient(raw, FMK_POLICY, clock=clock, sleep=clock.sleep)
 
         assert await client.get_text("https://www.fmkorea.com/start") == "done"
 
@@ -511,7 +512,7 @@ async def test_cross_origin_redirect_is_rejected_before_sending_secrets() -> Non
             "X-API-Key": "api-secret",
         },
     ) as raw_client:
-        client = FmkHttpClient(raw_client, min_interval=0)
+        client = CommunityHttpClient(raw_client, FMK_POLICY, min_interval=0)
 
         with pytest.raises(FetchError, match="cross-origin redirect"):
             await client.get_text("https://www.fmkorea.com/start")
@@ -534,7 +535,7 @@ async def test_redirect_without_location_is_a_fetch_error_and_clears_cookies() -
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
-        client = FmkHttpClient(raw_client, min_interval=0)
+        client = CommunityHttpClient(raw_client, FMK_POLICY, min_interval=0)
 
         with pytest.raises(FetchError, match="HTTP 302"):
             await client.get_text("https://www.fmkorea.com/start")
@@ -558,7 +559,7 @@ async def test_redirect_limit_is_enforced_and_cookies_are_cleared() -> None:
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
-        client = FmkHttpClient(raw_client, min_interval=0)
+        client = CommunityHttpClient(raw_client, FMK_POLICY, min_interval=0)
 
         with pytest.raises(FetchError, match="redirect limit"):
             await client.get_text("https://www.fmkorea.com/loop")
@@ -576,7 +577,7 @@ async def test_terminal_informational_or_redirect_status_is_a_fetch_error(
         return httpx.Response(status)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
-        client = FmkHttpClient(raw_client, min_interval=0)
+        client = CommunityHttpClient(raw_client, FMK_POLICY, min_interval=0)
 
         with pytest.raises(FetchError, match=f"HTTP {status}"):
             await client.get_text("https://www.fmkorea.com/post")
@@ -598,7 +599,7 @@ async def test_concurrent_requests_are_serialized_through_response_completion() 
             in_flight -= 1
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
-        client = FmkHttpClient(raw_client, min_interval=0)
+        client = CommunityHttpClient(raw_client, FMK_POLICY, min_interval=0)
 
         results = await asyncio.gather(
             client.get_text("https://www.fmkorea.com/one"),
@@ -631,7 +632,7 @@ async def test_cancellation_releases_lock_and_clears_cookies() -> None:
         return httpx.Response(200, text="ok")
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw_client:
-        client = FmkHttpClient(raw_client, min_interval=0)
+        client = CommunityHttpClient(raw_client, FMK_POLICY, min_interval=0)
         cancelled_request = asyncio.create_task(
             client.get_text("https://www.fmkorea.com/cancelled")
         )

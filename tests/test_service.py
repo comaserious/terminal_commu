@@ -8,26 +8,31 @@ from pathlib import Path
 import pytest
 
 from fmk_reader.adapters.base import RequestPolicy
+from fmk_reader.adapters.fmk import FmkAdapter
 from fmk_reader.cache import JsonCache
 from fmk_reader.errors import AccessBlocked, FetchError, ParseError, RateLimited
 from fmk_reader.models import Comment, PageResult, PostDetail, PostSummary
 from fmk_reader.parser import parse_board, parse_post
 from fmk_reader.service import (
-    BOARD_URL,
-    BoardService,
     CommunityService,
     DataSource,
     PostPage,
 )
-from fmk_reader.targets import CommunityTarget, Site
+from fmk_reader.targets import CommunityTarget, Site, route_url
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
 FMK_CACHE_PREFIX = "v2:fmkorea:football_world"
+FMK_BOARD_URL = "https://www.fmkorea.com/football_world"
 
 
 def fixture(name: str) -> str:
     return (FIXTURES / name).read_text(encoding="utf-8")
+
+
+def fmk_service(client: FakeClient, cache: JsonCache) -> CommunityService:
+    target = route_url(FMK_BOARD_URL)
+    return CommunityService(FmkAdapter(target), client, cache)
 
 
 class FakeClient:
@@ -259,7 +264,7 @@ async def test_load_board_fetches_once_then_returns_exact_cached_model(
     cache: JsonCache,
 ) -> None:
     client = FakeClient(fixture("board.html"))
-    service = BoardService(client, cache)
+    service = fmk_service(client, cache)
     expected = parse_board(fixture("board.html"), page=1)
 
     first = await service.load_board(1)
@@ -271,7 +276,7 @@ async def test_load_board_fetches_once_then_returns_exact_cached_model(
     assert second.value == expected
     assert second.source is DataSource.CACHE
     assert second.warning == ""
-    assert client.urls == [BOARD_URL]
+    assert client.urls == [FMK_BOARD_URL]
 
 
 async def test_expired_board_uses_stale_cache_after_rate_limit(
@@ -279,7 +284,7 @@ async def test_expired_board_uses_stale_cache_after_rate_limit(
     clock: list[float],
 ) -> None:
     client = FakeClient(fixture("board.html"), RateLimited("FMKorea", "30"))
-    service = BoardService(client, cache)
+    service = fmk_service(client, cache)
     expected = (await service.load_board(1)).value
     clock[0] = 161.0
 
@@ -297,7 +302,7 @@ async def test_refresh_bypasses_fresh_board_cache_and_replaces_it(
     original = fixture("board.html")
     updated = original.replace("일반 글", "새로운 글", 1)
     client = FakeClient(original, updated)
-    service = BoardService(client, cache)
+    service = fmk_service(client, cache)
 
     await service.load_board(1)
     refreshed = await service.load_board(1, refresh=True)
@@ -307,12 +312,12 @@ async def test_refresh_bypasses_fresh_board_cache_and_replaces_it(
     assert refreshed.value.items[0].title == "새로운 글"
     assert cached.source is DataSource.CACHE
     assert cached.value == refreshed.value
-    assert client.urls == [BOARD_URL, BOARD_URL]
+    assert client.urls == [FMK_BOARD_URL, FMK_BOARD_URL]
 
 
 async def test_load_board_uses_exact_page_urls(cache: JsonCache) -> None:
     client = FakeClient(fixture("board.html"), fixture("board.html"))
-    service = BoardService(client, cache)
+    service = fmk_service(client, cache)
 
     await service.load_board(1)
     await service.load_board(2)
@@ -341,7 +346,7 @@ async def test_load_post_uses_exact_url_and_caches_combined_and_body(
 ) -> None:
     post = board_post()
     client = FakeClient(fixture("post.html"))
-    service = BoardService(client, cache)
+    service = fmk_service(client, cache)
     expected_detail, expected_comments = parse_post(
         fixture("post.html"), post.url, cpage
     )
@@ -367,7 +372,7 @@ async def test_load_post_uses_exact_url_and_caches_combined_and_body(
 async def test_fresh_post_page_cache_avoids_network(cache: JsonCache) -> None:
     post = board_post()
     client = FakeClient(fixture("post.html"))
-    service = BoardService(client, cache)
+    service = fmk_service(client, cache)
     expected = await service.load_post(post)
 
     cached = await service.load_post(post)
@@ -384,7 +389,7 @@ async def test_load_post_rejects_mismatched_response_before_cache_write(
     valid_html = fixture("post.html")
     mismatched_html = valid_html.replace('data-docSrl="100"', 'data-docSrl="999"', 1)
     client = FakeClient(valid_html, mismatched_html)
-    service = BoardService(client, cache)
+    service = fmk_service(client, cache)
     original = await service.load_post(post)
 
     with pytest.raises(ParseError, match="post id mismatch"):
@@ -406,7 +411,7 @@ async def test_expired_combined_post_cache_is_stale_fallback(
 ) -> None:
     post = board_post()
     client = FakeClient(fixture("post.html"), FetchError("offline"))
-    service = BoardService(client, cache)
+    service = fmk_service(client, cache)
     expected = (await service.load_post(post)).value
     clock[0] = 221.0
 
@@ -422,7 +427,7 @@ async def test_cached_body_is_fallback_with_empty_requested_comment_page(
 ) -> None:
     post = board_post()
     client = FakeClient(fixture("post.html"), FetchError("offline"))
-    service = BoardService(client, cache)
+    service = fmk_service(client, cache)
     original = await service.load_post(post, cpage=1)
 
     result = await service.load_post(post, cpage=2)
@@ -451,7 +456,7 @@ async def test_fetch_failures_propagate_without_any_post_cache(
     error: FetchError,
 ) -> None:
     client = FakeClient(error)
-    service = BoardService(client, cache)
+    service = fmk_service(client, cache)
 
     with pytest.raises(type(error)) as raised:
         await service.load_post(board_post())
@@ -464,7 +469,7 @@ async def test_parse_error_propagates_instead_of_using_stale_board(
     clock: list[float],
 ) -> None:
     client = FakeClient(fixture("board.html"), "<html></html>")
-    service = BoardService(client, cache)
+    service = fmk_service(client, cache)
     await service.load_board(1)
     clock[0] = 161.0
 
@@ -485,13 +490,13 @@ async def test_malformed_strict_board_cache_is_a_miss_and_gets_replaced(
         },
     )
     client = FakeClient(fixture("board.html"))
-    service = BoardService(client, cache)
+    service = fmk_service(client, cache)
 
     result = await service.load_board(1)
 
     assert result.source is DataSource.NETWORK
     assert result.value == parse_board(fixture("board.html"), page=1)
-    assert client.urls == [BOARD_URL]
+    assert client.urls == [FMK_BOARD_URL]
 
 
 def test_post_page_strict_round_trip() -> None:

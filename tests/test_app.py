@@ -8,13 +8,15 @@ import pytest
 from textual.app import App
 from textual.containers import Horizontal, VerticalScroll
 from textual.pilot import Pilot
-from textual.widgets import ListView, Static
+from textual.widgets import ListView, OptionList, Static
 
 import fmk_reader.app as app_module
-from fmk_reader.app import FmkReaderApp
+from fmk_reader.adapters import adapter_for
+from fmk_reader.app import CommunityReaderApp, FmkReaderApp, ReaderResources
 from fmk_reader.errors import ReaderError
 from fmk_reader.models import Comment, PageResult, PostDetail, PostSummary
 from fmk_reader.service import DataSource, LoadResult, PostPage
+from fmk_reader.targets import CommunityTarget, route_url
 
 
 POSTS = (
@@ -228,7 +230,7 @@ class LiteralTextService(FakeService):
         return LoadResult(PostPage(detail, comments), DataSource.CACHE)
 
 
-class NoticeApp(FmkReaderApp):
+class NoticeApp(CommunityReaderApp):
     def __init__(self, service: ReaderService) -> None:
         self.notices: list[str] = []
         super().__init__(service=service)
@@ -248,13 +250,108 @@ def widget_text(widget: Static) -> str:
 
 
 def test_app_has_expected_title() -> None:
-    app = FmkReaderApp(service=FakeService())
-    assert app.TITLE == "FMK 해외축구"
+    app = CommunityReaderApp(service=FakeService())
+    assert app.TITLE == "Commu"
+    assert FmkReaderApp is CommunityReaderApp
+
+
+class GatedDirectService(FakeService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.gate = asyncio.Event()
+
+    async def load_post(
+        self,
+        post: PostSummary,
+        cpage: int = 1,
+        refresh: bool = False,
+    ) -> LoadResult[PostPage]:
+        self.started.set()
+        await self.gate.wait()
+        return await super().load_post(post, cpage, refresh)
+
+
+async def test_direct_article_starts_in_loading_reader_then_back_loads_board() -> None:
+    service = GatedDirectService()
+    target = route_url("https://arca.live/b/rogersfu/176096992")
+    app = CommunityReaderApp(target=target, service=service)
+
+    async with app.run_test(size=(90, 30)) as pilot:
+        await pilot.pause()
+        assert service.started.is_set()
+        assert service.board_calls == []
+        assert "불러오는 중..." in widget_text(
+            app.query_one("#article-content", Static)
+        )
+        assert app.query_one("#main", Horizontal).has_class("reading")
+
+        service.gate.set()
+        await settle(app, pilot)
+        assert service.post_calls == [("176096992", 1, False)]
+
+        await pilot.press("escape")
+        await settle(app, pilot)
+        assert service.board_calls == [(1, False)]
+        assert not app.query_one("#main", Horizontal).has_class("reading")
+
+
+class SwitchRawClient:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+
+
+class SwitchCache:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
+class SwitchFactory:
+    def __init__(self) -> None:
+        self.created: list[CommunityTarget] = []
+        self.raw_clients: list[SwitchRawClient] = []
+        self.caches: list[SwitchCache] = []
+
+    def __call__(self, target: CommunityTarget) -> ReaderResources:
+        raw = SwitchRawClient()
+        cache = SwitchCache()
+        self.created.append(target)
+        self.raw_clients.append(raw)
+        self.caches.append(cache)
+        return ReaderResources(raw, cache, adapter_for(target), FakeService())
+
+
+async def test_switch_site_closes_resources_clears_reader_and_reopens_launcher() -> None:
+    factory = SwitchFactory()
+    first = route_url("https://www.fmkorea.com/football_world")
+    app = CommunityReaderApp(target=first, resource_factory=factory)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert app.current_post is not None
+
+        await pilot.press("s")
+        await pilot.pause()
+
+        assert app.target is None
+        assert factory.raw_clients[0].close_calls == 1
+        assert factory.caches[0].close_calls == 1
+        assert app.current_post is None
+        assert widget_text(app.default_screen.query_one("#article-content", Static)) == ""
+        assert app.query_one("#launcher-sites", OptionList).display
 
 
 async def test_mount_loads_board_focuses_list_and_shows_source() -> None:
     service = FakeService()
-    app = FmkReaderApp(service=service)
+    app = CommunityReaderApp(service=service)
 
     async with app.run_test(size=(120, 34)) as pilot:
         await settle(app, pilot)
@@ -274,7 +371,7 @@ async def test_mount_loads_board_focuses_list_and_shows_source() -> None:
 
 async def test_down_and_enter_load_selected_post_and_render_article() -> None:
     service = FakeService()
-    app = FmkReaderApp(service=service)
+    app = CommunityReaderApp(service=service)
 
     async with app.run_test(size=(120, 34)) as pilot:
         await settle(app, pilot)
@@ -292,7 +389,7 @@ async def test_down_and_enter_load_selected_post_and_render_article() -> None:
 
 
 async def test_narrow_reading_mode_and_wide_split_visibility() -> None:
-    narrow = FmkReaderApp(service=FakeService())
+    narrow = CommunityReaderApp(service=FakeService())
     async with narrow.run_test(size=(90, 30)) as pilot:
         await settle(narrow, pilot)
         main = narrow.query_one("#main", Horizontal)
@@ -314,7 +411,7 @@ async def test_narrow_reading_mode_and_wide_split_visibility() -> None:
         assert post_list.display
         assert post_list.has_focus
 
-    wide = FmkReaderApp(service=FakeService())
+    wide = CommunityReaderApp(service=FakeService())
     async with wide.run_test(size=(120, 30)) as pilot:
         await settle(wide, pilot)
         assert wide.query_one("#post-list", ListView).display
@@ -323,7 +420,7 @@ async def test_narrow_reading_mode_and_wide_split_visibility() -> None:
 
 async def test_arrow_pages_board_and_comments_only_within_boundaries() -> None:
     service = FakeService()
-    app = FmkReaderApp(service=service)
+    app = CommunityReaderApp(service=service)
 
     async with app.run_test(size=(120, 34)) as pilot:
         await settle(app, pilot)
@@ -360,7 +457,7 @@ async def test_arrow_pages_board_and_comments_only_within_boundaries() -> None:
 
 async def test_refresh_uses_focused_context() -> None:
     service = FakeService()
-    app = FmkReaderApp(service=service)
+    app = CommunityReaderApp(service=service)
 
     async with app.run_test(size=(120, 34)) as pilot:
         await settle(app, pilot)
@@ -377,7 +474,7 @@ async def test_refresh_uses_focused_context() -> None:
 
 async def test_tab_focuses_article_and_arrows_scroll_it() -> None:
     body = "\n".join(f"본문 {line}" for line in range(150))
-    app = FmkReaderApp(service=FakeService(body=body))
+    app = CommunityReaderApp(service=FakeService(body=body))
 
     async with app.run_test(size=(120, 20)) as pilot:
         await settle(app, pilot)
@@ -417,57 +514,24 @@ async def test_reader_error_notifies_without_stopping_app(context: str) -> None:
 
 
 async def test_production_resources_are_owned_but_injected_service_is_not(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class RawClient:
-        def __init__(self) -> None:
-            self.closed = False
-
-        async def aclose(self) -> None:
-            self.closed = True
-
-    class Cache:
-        def __init__(self, path: object) -> None:
-            self.path = path
-            self.closed = False
-
-        def close(self) -> None:
-            self.closed = True
-
-    raw = RawClient()
-    created: dict[str, object] = {}
-    production_service = FakeService()
-    monkeypatch.setattr(app_module, "make_httpx_client", lambda: raw)
-    monkeypatch.setattr(app_module, "FmkHttpClient", lambda client: client)
-
-    def make_cache(path: object) -> Cache:
-        cache = Cache(path)
-        created["cache"] = cache
-        return cache
-
-    monkeypatch.setattr(app_module, "JsonCache", make_cache)
-    monkeypatch.setattr(
-        app_module,
-        "BoardService",
-        lambda client, cache: production_service,
-    )
-
-    production = FmkReaderApp()
+    factory = SwitchFactory()
+    target = route_url("https://www.fmkorea.com/football_world")
+    production = CommunityReaderApp(target=target, resource_factory=factory)
     async with production.run_test(size=(120, 30)) as pilot:
         await settle(production, pilot)
-    assert raw.closed
-    assert isinstance(created["cache"], Cache)
-    assert created["cache"].closed
+    assert factory.raw_clients[0].close_calls == 1
+    assert factory.caches[0].close_calls == 1
 
     injected = FakeService()
-    injected_app = FmkReaderApp(service=injected)
+    injected_app = CommunityReaderApp(service=injected)
     async with injected_app.run_test(size=(120, 30)) as pilot:
         await settle(injected_app, pilot)
     assert not hasattr(injected, "closed")
 
 
 async def test_remote_rich_like_text_is_rendered_literally() -> None:
-    app = FmkReaderApp(service=LiteralTextService())
+    app = CommunityReaderApp(service=LiteralTextService())
 
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
@@ -490,7 +554,7 @@ async def test_remote_rich_like_text_is_rendered_literally() -> None:
 
 async def test_rapid_arrows_coalesce_to_next_confirmed_pages() -> None:
     service = DelayedService()
-    app = FmkReaderApp(service=service)
+    app = CommunityReaderApp(service=service)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
@@ -589,7 +653,7 @@ async def test_failed_comment_navigation_and_new_post_failure_clear_stale_ui() -
 
 
 async def test_live_resize_moves_focus_to_visible_pane() -> None:
-    app = FmkReaderApp(service=FakeService())
+    app = CommunityReaderApp(service=FakeService())
 
     async with app.run_test(size=(120, 30)) as pilot:
         await settle(app, pilot)
@@ -617,7 +681,6 @@ async def test_live_resize_moves_focus_to_visible_pane() -> None:
 
 
 async def test_cache_closes_when_http_client_close_raises(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class BrokenRawClient:
         async def aclose(self) -> None:
@@ -632,16 +695,57 @@ async def test_cache_closes_when_http_client_close_raises(
 
     raw = BrokenRawClient()
     cache = Cache(object())
-    monkeypatch.setattr(app_module, "make_httpx_client", lambda: raw)
-    monkeypatch.setattr(app_module, "FmkHttpClient", lambda client: client)
+    target = route_url("https://www.fmkorea.com/football_world")
+
+    def factory(selected: CommunityTarget) -> ReaderResources:
+        return ReaderResources(raw, cache, adapter_for(selected), FakeService())
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        async with CommunityReaderApp(
+            target=target, resource_factory=factory
+        ).run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+    assert cache.closed
+
+
+async def test_resource_factory_closes_partial_resources_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RawClient:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    class Cache:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    raw = RawClient()
+    cache = Cache()
+    target = route_url("https://www.fmkorea.com/football_world")
+    adapter = adapter_for(target)
+    monkeypatch.setattr(app_module, "adapter_for", lambda selected: adapter)
+    monkeypatch.setattr(app_module, "make_httpx_client", lambda policy: raw)
     monkeypatch.setattr(app_module, "JsonCache", lambda path: cache)
     monkeypatch.setattr(
         app_module,
-        "BoardService",
-        lambda client, owned_cache: FakeService(),
+        "CommunityHttpClient",
+        lambda client, policy: object(),
     )
 
-    with pytest.raises(RuntimeError, match="close failed"):
-        async with FmkReaderApp().run_test(size=(120, 30)) as pilot:
-            await pilot.pause()
-    assert cache.closed
+    def fail_service(*args: object) -> None:
+        raise RuntimeError("service construction failed")
+
+    monkeypatch.setattr(app_module, "CommunityService", fail_service)
+
+    with pytest.raises(RuntimeError, match="service construction failed"):
+        app_module.create_reader_resources(target)
+    await asyncio.sleep(0)
+
+    assert raw.close_calls == 1
+    assert cache.close_calls == 1

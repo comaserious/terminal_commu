@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "fmk-reader"
 version = "0.1.0"
-description = "Read FMKorea football_world in a terminal"
+description = "Read supported community boards in a terminal"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "beautifulsoup4>=4.14,<5",
@@ -20,6 +20,7 @@ dev = [
 ]
 
 [project.scripts]
+commu = "fmk_reader.app:main"
 fmk = "fmk_reader.app:main"
 
 [tool.hatch.build.targets.wheel]

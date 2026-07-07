@@ -5,14 +5,9 @@ from enum import Enum
 from typing import Any, Generic, Protocol, TypeVar
 
 from fmk_reader.adapters.base import CommunityAdapter
-from fmk_reader.adapters.fmk import FmkAdapter
 from fmk_reader.cache import JsonCache
 from fmk_reader.errors import FetchError, ParseError, RateLimited
 from fmk_reader.models import Comment, PageResult, PostDetail, PostSummary
-from fmk_reader.targets import route_url
-
-
-BOARD_URL = "https://www.fmkorea.com/football_world"
 BOARD_TTL = 60.0
 POST_TTL = 1800.0
 COMMENTS_TTL = 120.0
@@ -199,12 +194,6 @@ class CommunityService:
             return PostDetail.from_dict(hit.value)
         except (TypeError, ValueError):
             return None
-
-
-class BoardService(CommunityService):
-    def __init__(self, client: TextClient, cache: JsonCache) -> None:
-        target = route_url(BOARD_URL)
-        super().__init__(FmkAdapter(target), client, cache)
 
 
 def _stale_warning(

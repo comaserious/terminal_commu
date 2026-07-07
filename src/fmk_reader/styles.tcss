@@ -1,5 +1,29 @@
+LauncherScreen {
+    align: center top;
+}
+
 #main {
     height: 1fr;
+}
+
+#launcher {
+    width: 64;
+    height: auto;
+    max-height: 24;
+    margin: 3 0;
+    padding: 1 2;
+    border: round $primary;
+}
+
+#launcher-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#launcher-error {
+    color: $error;
+    min-height: 1;
+    margin-top: 1;
 }
 
 #post-list {
