@@ -112,8 +112,26 @@ def _comment_id(item: Tag) -> str | None:
     return match.group(1) if match else None
 
 
-def _linked_page(href: str) -> int | None:
-    values = parse_qs(urlsplit(href).query).get("cpage", [])
+def _linked_comment_page(
+    href: str,
+    board_id: str,
+    post_id: str,
+) -> int | None:
+    try:
+        parsed = urlsplit(href.strip())
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "m.dcinside.com"
+        or port not in (None, 443)
+        or parsed.username is not None
+        or parsed.password is not None
+        or _article_identity(href) != (board_id, post_id)
+    ):
+        return None
+    values = parse_qs(parsed.query).get("cpage", [])
     if len(values) != 1 or not values[0].isdecimal():
         return None
     return int(values[0])
@@ -318,8 +336,17 @@ class DcinsideAdapter:
 
         linked_pages = {
             linked_page
-            for anchor in soup.select(".all-comment a[href*='cpage=']")
-            if (linked_page := _linked_page(str(anchor.get("href", "")))) is not None
+            for anchor in soup.select(
+                ".all-comment > .comment-paging a[href*='cpage=']"
+            )
+            if (
+                linked_page := _linked_comment_page(
+                    str(anchor.get("href", "")),
+                    self.target.board_id,
+                    post.post_id,
+                )
+            )
+            is not None
         }
         return PostDetail(summary=summary, body=body, links=links), PageResult(
             items=tuple(comments),

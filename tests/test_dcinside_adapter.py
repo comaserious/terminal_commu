@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from bs4 import BeautifulSoup
 
 from fmk_reader.adapters import adapter_for
 from fmk_reader.adapters.dcinside import DcinsideAdapter
@@ -51,6 +52,43 @@ def test_dc_post_reads_body_comments_replies_and_media_placeholders() -> None:
     assert detail.links == ("https://example.test/reference",)
     assert [comment.depth for comment in comments.items] == [0, 1]
     assert "[디시콘]" in comments.items[1].content
+    assert [comment.comment_id for comment in comments.items] == ["9001", "9002"]
+    assert [comment.author for comment in comments.items] == ["첫님", "답글러"]
+    assert [comment.created_at for comment in comments.items] == [
+        "07.07 14:03",
+        "07.07 14:04",
+    ]
+    assert comments.items[0].content == "첫님 댓글\n사용자 링크"
+
+    rendered = "\n".join(
+        [detail.body, *(comment.content for comment in comments.items)]
+    )
+    for media_value in (
+        "https://media.example.test/photo.jpg",
+        "https://media.example.test/movie.mp4",
+        "https://media.example.test/dccon.png",
+        "photo-alt-hash",
+        "dccon-alt-hash",
+    ):
+        assert media_value not in rendered
+
+
+def test_dc_comment_paging_uses_only_valid_same_article_controls() -> None:
+    dc = adapter()
+    html = fixture("dc_post.html")
+    post = dc.parse_board(fixture("dc_board.html"), 1).items[1]
+    without_controls = BeautifulSoup(html, "html.parser")
+    paging = without_controls.select_one(".all-comment > .comment-paging")
+    assert paging is not None
+    paging.decompose()
+
+    _, user_link_only = dc.parse_post(str(without_controls), post, 1)
+    _, first_page = dc.parse_post(html, post, 1)
+    _, later_page = dc.parse_post(html, post, 2)
+
+    assert (user_link_only.has_previous, user_link_only.has_next) == (False, False)
+    assert (first_page.has_previous, first_page.has_next) == (False, True)
+    assert (later_page.has_previous, later_page.has_next) == (True, False)
 
 
 def test_dc_adapter_builds_canonical_fetch_urls_and_direct_post() -> None:
