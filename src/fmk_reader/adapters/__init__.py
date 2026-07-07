@@ -1,5 +1,6 @@
 from typing import assert_never
 
+from fmk_reader.adapters.arca import ArcaAdapter
 from fmk_reader.adapters.base import CommunityAdapter, RequestPolicy
 from fmk_reader.adapters.dcinside import DcinsideAdapter
 from fmk_reader.adapters.fmk import FmkAdapter
@@ -13,7 +14,7 @@ def adapter_for(target: CommunityTarget) -> CommunityAdapter:
         case Site.DCINSIDE:
             return DcinsideAdapter(target)
         case Site.ARCA:
-            raise NotImplementedError("Arca adapter is not implemented")
+            return ArcaAdapter(target)
     assert_never(target.site)
 
 

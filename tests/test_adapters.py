@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from fmk_reader.adapters import adapter_for
+from fmk_reader.adapters.arca import ArcaAdapter
 from fmk_reader.adapters.fmk import FmkAdapter
 from fmk_reader.errors import ParseError
 from fmk_reader.models import PostSummary
@@ -22,11 +23,10 @@ def test_adapter_for_returns_fmk_adapter() -> None:
     assert adapter.policy.rate_limit_statuses == frozenset({429, 430})
 
 
-def test_adapter_for_rejects_sites_without_implemented_adapters() -> None:
+def test_adapter_for_returns_arca_adapter() -> None:
     arca = route_url("https://arca.live/b/rogersfu")
 
-    with pytest.raises(NotImplementedError):
-        adapter_for(arca)
+    assert isinstance(adapter_for(arca), ArcaAdapter)
 
 
 def test_fmk_adapter_preserves_existing_parser_behavior() -> None:
