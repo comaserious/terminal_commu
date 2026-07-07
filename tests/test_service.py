@@ -405,6 +405,36 @@ async def test_load_post_rejects_mismatched_response_before_cache_write(
     assert body.value == original.value.detail.to_dict()
 
 
+async def test_fmk_wrong_board_response_is_rejected_before_cache_writes(
+    cache: JsonCache,
+) -> None:
+    post = board_post()
+    wrong_board = fixture("post.html").replace(
+        "mid=football_world",
+        "mid=baseball",
+        1,
+    )
+    service = fmk_service(FakeClient(wrong_board), cache)
+
+    with pytest.raises(ParseError, match="FMKorea: returned board 'baseball'"):
+        await service.load_post(post)
+
+    assert (
+        cache.get(
+            f"{FMK_CACHE_PREFIX}:post:{post.post_id}:comments:1",
+            ttl=120.0,
+        )
+        is None
+    )
+    assert (
+        cache.get(
+            f"{FMK_CACHE_PREFIX}:post:{post.post_id}:body",
+            ttl=1800.0,
+        )
+        is None
+    )
+
+
 async def test_expired_combined_post_cache_is_stale_fallback(
     cache: JsonCache,
     clock: list[float],
@@ -473,7 +503,10 @@ async def test_parse_error_propagates_instead_of_using_stale_board(
     await service.load_board(1)
     clock[0] = 161.0
 
-    with pytest.raises(ParseError, match="missing board rows"):
+    with pytest.raises(
+        ParseError,
+        match="^FMKorea: returned page has no trustworthy board identity$",
+    ):
         await service.load_board(1)
 
 

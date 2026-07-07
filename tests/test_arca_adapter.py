@@ -161,3 +161,62 @@ def test_arca_post_rejects_mismatched_channel_and_article_identity() -> None:
         match="^아카라이브 게시글 정보가 요청과 일치하지 않습니다$",
     ):
         adapter().parse_post(html, post, 1)
+
+
+@pytest.mark.parametrize(
+    "href",
+    [
+        "http://arca.live/b/rogersfu/176096992",
+        "https://example.test/b/rogersfu/176096992",
+    ],
+)
+def test_arca_board_rejects_http_and_cross_origin_article_rows(href: str) -> None:
+    html = fixture("arca_board.html").replace(
+        "/b/rogersfu/176096992?p=1&amp;mode=best",
+        href,
+        1,
+    )
+
+    page = adapter().parse_board(html, 1)
+
+    assert "176096992" not in {post.post_id for post in page.items}
+
+
+@pytest.mark.parametrize(
+    "href",
+    [
+        "http://arca.live/b/rogersfu/176096992?p=1",
+        "https://example.test/b/rogersfu/176096992?p=1",
+    ],
+)
+def test_arca_post_rejects_http_and_cross_origin_identity_links(href: str) -> None:
+    html = fixture("arca_post.html").replace(
+        "https://arca.live/b/rogersfu/176096992?p=1",
+        href,
+        1,
+    )
+    post = adapter().parse_board(fixture("arca_board.html"), 1).items[1]
+
+    with pytest.raises(
+        ParseError,
+        match="^아카라이브 게시글 정보 구조를 찾을 수 없습니다$",
+    ):
+        adapter().parse_post(html, post, 1)
+
+
+def test_arca_comment_preserves_nested_wrapper_depth_beyond_one() -> None:
+    html = fixture("arca_post.html").replace(
+        '<div class="comment-wrapper reply" data-depth="1">',
+        '<div class="comment-wrapper"><div class="comment-wrapper">'
+        '<div class="comment-wrapper reply">',
+        1,
+    ).replace(
+        "        </div>\n      </div>\n    </div>\n  </body>",
+        "        </div></div></div>\n      </div>\n    </div>\n  </body>",
+        1,
+    )
+    post = adapter().parse_board(fixture("arca_board.html"), 1).items[1]
+
+    _, comments = adapter().parse_post(html, post, 1)
+
+    assert comments.items[1].depth == 2

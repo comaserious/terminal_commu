@@ -33,6 +33,7 @@ class FakeCache:
 class FakeAdapter:
     def __init__(self, target: CommunityTarget) -> None:
         self.target = target
+        self.site_name = target.site.display_name
 
     def direct_post(self) -> PostSummary | None:
         return None
@@ -129,6 +130,25 @@ async def test_launcher_separated_arrow_and_enter_keys_use_current_step() -> Non
         expected = route_url(
             "https://gall.dcinside.com/board/lists/?id=football_new9"
         )
+        assert app.target == expected
+        assert factory.created == [expected]
+
+
+async def test_launcher_mouse_clicks_select_site_and_recommended_board() -> None:
+    factory = FakeResourceFactory()
+    app = CommunityReaderApp(resource_factory=factory)
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.click("#launcher-sites", offset=(2, 3))
+        await pilot.pause()
+        assert app.query_one("#launcher-access", OptionList).display
+
+        await pilot.click("#launcher-access", offset=(2, 1))
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        expected = route_url("https://arca.live/b/rogersfu")
         assert app.target == expected
         assert factory.created == [expected]
 

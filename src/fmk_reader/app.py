@@ -17,7 +17,11 @@ from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
 from fmk_reader.adapters import CommunityAdapter, adapter_for
 from fmk_reader.cache import JsonCache
-from fmk_reader.client import CommunityHttpClient, make_httpx_client
+from fmk_reader.client import (
+    DEFAULT_REQUEST_STATE_REGISTRY,
+    CommunityHttpClient,
+    make_httpx_client,
+)
 from fmk_reader.errors import ReaderError
 from fmk_reader.launcher import LauncherScreen
 from fmk_reader.models import Comment, PageResult, PostSummary
@@ -46,6 +50,13 @@ class ReaderResources:
     service: CommunityService
 
 
+@dataclass(slots=True)
+class PendingResourceCleanup:
+    resources: ReaderResources
+    raw_client_closed: bool = False
+    cache_closed: bool = False
+
+
 class ResourceFactory(Protocol):
     def __call__(
         self, target: CommunityTarget
@@ -61,7 +72,11 @@ async def create_reader_resources(target: CommunityTarget) -> ReaderResources:
         raw_client = make_httpx_client(adapter.policy)
         service = CommunityService(
             adapter,
-            CommunityHttpClient(raw_client, adapter.policy),
+            CommunityHttpClient(
+                raw_client,
+                adapter.policy,
+                state=DEFAULT_REQUEST_STATE_REGISTRY.state_for(target.site),
+            ),
             cache,
         )
         return ReaderResources(raw_client, cache, adapter, service)
@@ -152,6 +167,8 @@ class CommunityReaderApp(App[None]):
         self._activation_generation = 0
         self._activation_in_progress = False
         self._reader_unusable = False
+        self._reader_context = ""
+        self._pending_resource_cleanups: list[PendingResourceCleanup] = []
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -178,7 +195,25 @@ class CommunityReaderApp(App[None]):
     async def on_unmount(self) -> None:
         self._activation_generation += 1
         self._activation_in_progress = False
-        await self._release_owned_resources()
+        active_error: BaseException | None = None
+        try:
+            await self._release_owned_resources()
+        except BaseException as error:
+            active_error = error
+        cleanup_errors = await self._retry_pending_resource_cleanups()
+        if active_error is not None:
+            for cleanup_error in cleanup_errors:
+                active_error.add_note(
+                    f"Additional retained cleanup error: {cleanup_error}"
+                )
+            raise active_error
+        if cleanup_errors:
+            first_error = cleanup_errors[0]
+            for cleanup_error in cleanup_errors[1:]:
+                first_error.add_note(
+                    f"Additional retained cleanup error: {cleanup_error}"
+                )
+            raise first_error
 
     def _accept_target(self, target: CommunityTarget | None) -> None:
         if target is None:
@@ -254,6 +289,7 @@ class CommunityReaderApp(App[None]):
         self._injected_service = None
         self._reader_unusable = False
         self._activation_in_progress = False
+        self._set_reader_context(adapter.site_name, target.board_id)
         if direct_post is None:
             self.load_board()
             return
@@ -273,18 +309,62 @@ class CommunityReaderApp(App[None]):
         resources: ReaderResources,
         original_error: BaseException | None = None,
     ) -> None:
-        cleanup_errors: list[BaseException] = []
-        try:
-            await resources.raw_client.aclose()
-        except BaseException as error:
-            cleanup_errors.append(error)
-        try:
-            resources.cache.close()
-        except BaseException as error:
-            cleanup_errors.append(error)
+        pending = PendingResourceCleanup(resources)
+        cleanup_errors = await self._close_pending_resources(pending)
+        if cleanup_errors:
+            self._pending_resource_cleanups.append(pending)
         if original_error is not None:
             for cleanup_error in cleanup_errors:
                 original_error.add_note(f"Cleanup error: {cleanup_error}")
+        elif cleanup_errors:
+            self.notify(
+                "사용하지 않는 리소스를 닫는 중 오류가 발생했습니다: "
+                f"{cleanup_errors[0]}",
+                severity="error",
+                markup=False,
+            )
+
+    async def _close_pending_resources(
+        self,
+        pending: PendingResourceCleanup,
+    ) -> list[BaseException]:
+        cleanup_errors: list[BaseException] = []
+        if not pending.raw_client_closed:
+            try:
+                await pending.resources.raw_client.aclose()
+            except BaseException as error:
+                cleanup_errors.append(error)
+            else:
+                pending.raw_client_closed = True
+        if not pending.cache_closed:
+            try:
+                pending.resources.cache.close()
+            except BaseException as error:
+                cleanup_errors.append(error)
+            else:
+                pending.cache_closed = True
+        return cleanup_errors
+
+    async def _retry_pending_resource_cleanups(self) -> list[BaseException]:
+        cleanup_errors: list[BaseException] = []
+        retained: list[PendingResourceCleanup] = []
+        for pending in self._pending_resource_cleanups:
+            errors = await self._close_pending_resources(pending)
+            cleanup_errors.extend(errors)
+            if errors:
+                retained.append(pending)
+        self._pending_resource_cleanups = retained
+        return cleanup_errors
+
+    def _set_reader_context(self, site_name: str, board_id: str) -> None:
+        self._reader_context = f"{site_name} · {board_id}"
+        self.title = f"{self.TITLE} · {self._reader_context}"
+        self.sub_title = self._reader_context
+
+    def _status_with_context(self, status: str) -> str:
+        if not self._reader_context:
+            return status
+        return f"{self._reader_context} · {status}"
 
     def _show_activation_loading(self) -> None:
         self.default_screen.query_one("#main", Horizontal).remove_class("reading")
@@ -383,7 +463,7 @@ class CommunityReaderApp(App[None]):
             self.board_page = result.value.page
             self.board_has_previous = result.value.has_previous
             self.board_has_next = result.value.has_next
-            self.sub_title = (
+            self.sub_title = self._status_with_context(
                 f"{result.value.page}페이지 · {result.source.value}"
             )
             if result.warning:
@@ -467,7 +547,7 @@ class CommunityReaderApp(App[None]):
             self.query_one("#article-content", Static).update(
                 self._format_article(page)
             )
-            self.sub_title = (
+            self.sub_title = self._status_with_context(
                 f"글 {summary.post_id} · 댓글 {page.comments.page}페이지 "
                 f"· {result.source.value}"
             )
@@ -492,6 +572,9 @@ class CommunityReaderApp(App[None]):
         self.query_one("#article-title", Static).update(post.title)
         self.query_one("#article-meta", Static).update("불러오는 중...")
         self.query_one("#article-content", Static).update("불러오는 중...")
+        self.sub_title = self._status_with_context(
+            f"글 {post.post_id} · 불러오는 중"
+        )
 
     def _show_load_failure(
         self, post: PostSummary, error: ReaderError
@@ -500,6 +583,9 @@ class CommunityReaderApp(App[None]):
         self.query_one("#article-meta", Static).update("불러오기 실패")
         self.query_one("#article-content", Static).update(
             f"불러오기 실패: {error}"
+        )
+        self.sub_title = self._status_with_context(
+            f"글 {post.post_id} · 불러오기 실패"
         )
 
     @staticmethod
@@ -606,6 +692,8 @@ class CommunityReaderApp(App[None]):
         self.query_one("#article-meta", Static).update("")
         self.query_one("#article-content", Static).update("")
         self.query_one("#main", Horizontal).remove_class("reading")
+        self._reader_context = ""
+        self.title = self.TITLE
         self.sub_title = ""
         self.push_screen(LauncherScreen(), self._accept_target)
 

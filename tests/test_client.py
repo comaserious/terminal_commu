@@ -8,9 +8,12 @@ import pytest
 from fmk_reader.client import (
     FMK_POLICY,
     CommunityHttpClient,
+    CommunityRequestState,
+    RequestStateRegistry,
     make_httpx_client,
 )
 from fmk_reader.errors import AccessBlocked, FetchError, RateLimited
+from fmk_reader.targets import Site
 
 
 class FakeClock:
@@ -24,6 +27,93 @@ class FakeClock:
     async def sleep(self, delay: float) -> None:
         self.sleeps.append(delay)
         self.now += delay
+
+
+@pytest.mark.asyncio
+async def test_same_site_state_spaces_requests_across_client_recreation() -> None:
+    clock = FakeClock(10.0)
+    starts: list[float] = []
+    state = CommunityRequestState()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        starts.append(clock.now)
+        return httpx.Response(200, text="ok")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as first_raw:
+        first = CommunityHttpClient(
+            first_raw,
+            FMK_POLICY,
+            state=state,
+            clock=clock,
+            sleep=clock.sleep,
+        )
+        assert await first.get_text("https://www.fmkorea.com/first") == "ok"
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as second_raw:
+        second = CommunityHttpClient(
+            second_raw,
+            FMK_POLICY,
+            state=state,
+            clock=clock,
+            sleep=clock.sleep,
+        )
+        assert await second.get_text("https://www.fmkorea.com/second") == "ok"
+
+    assert starts == [10.0, 12.0]
+    assert clock.sleeps == [2.0]
+
+
+@pytest.mark.asyncio
+async def test_fmk_cooldown_survives_client_close_and_reselection() -> None:
+    now = [100.0]
+    state = CommunityRequestState()
+    first_requests: list[httpx.Request] = []
+    second_requests: list[httpx.Request] = []
+
+    def limited(request: httpx.Request) -> httpx.Response:
+        first_requests.append(request)
+        return httpx.Response(430, headers={"Retry-After": "300"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(limited)) as raw:
+        client = CommunityHttpClient(
+            raw,
+            FMK_POLICY,
+            state=state,
+            clock=lambda: now[0],
+        )
+        with pytest.raises(RateLimited, match="300"):
+            await client.get_text("https://www.fmkorea.com/football_world")
+
+    now[0] += 1
+
+    def should_not_send(request: httpx.Request) -> httpx.Response:
+        second_requests.append(request)
+        return httpx.Response(200, text="too early")
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(should_not_send)
+    ) as raw:
+        reselected = CommunityHttpClient(
+            raw,
+            FMK_POLICY,
+            state=state,
+            clock=lambda: now[0],
+        )
+        with pytest.raises(RateLimited, match="299"):
+            await reselected.get_text("https://www.fmkorea.com/football_world")
+
+    assert len(first_requests) == 1
+    assert second_requests == []
+
+
+def test_request_state_registry_reuses_only_the_same_site_state() -> None:
+    registry = RequestStateRegistry()
+
+    fmk = registry.state_for(Site.FMKOREA)
+
+    assert registry.state_for(Site.FMKOREA) is fmk
+    assert registry.state_for(Site.DCINSIDE) is not fmk
+    assert registry.state_for(Site.ARCA) is not fmk
 
 
 @pytest.mark.asyncio

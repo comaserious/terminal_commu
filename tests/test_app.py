@@ -465,6 +465,142 @@ async def test_mount_loads_board_focuses_list_and_shows_source() -> None:
         assert "댓글 1" in rendered
 
 
+@pytest.mark.parametrize(
+    ("url", "site_name", "board_id"),
+    [
+        ("https://www.fmkorea.com/football_world", "FMKorea", "football_world"),
+        (
+            "https://gall.dcinside.com/board/lists/?id=football_new9",
+            "디시인사이드",
+            "football_new9",
+        ),
+        ("https://arca.live/b/rogersfu", "아카라이브", "rogersfu"),
+    ],
+)
+async def test_reader_title_and_every_status_keep_active_target_context(
+    url: str,
+    site_name: str,
+    board_id: str,
+) -> None:
+    app = CommunityReaderApp(target=route_url(url), service=FakeService())
+    prefix = f"{site_name} · {board_id}"
+
+    async with app.run_test(size=(120, 34)) as pilot:
+        await settle(app, pilot)
+
+        assert prefix in app.title
+        assert app.sub_title.startswith(prefix)
+        assert "1페이지" in app.sub_title
+
+        await pilot.press("enter")
+        await settle(app, pilot)
+
+        assert prefix in app.title
+        assert app.sub_title.startswith(prefix)
+        assert "글 100" in app.sub_title
+
+
+async def test_default_resource_factory_reuses_request_state_per_site(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    states: list[object | None] = []
+
+    class Raw:
+        async def aclose(self) -> None:
+            return None
+
+    class Cache:
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(app_module, "make_httpx_client", lambda policy: Raw())
+    monkeypatch.setattr(app_module, "JsonCache", lambda path: Cache())
+
+    def capture_client(
+        raw: object,
+        policy: object,
+        *,
+        state: object | None = None,
+    ) -> object:
+        states.append(state)
+        return object()
+
+    monkeypatch.setattr(app_module, "CommunityHttpClient", capture_client)
+    monkeypatch.setattr(
+        app_module,
+        "CommunityService",
+        lambda adapter, client, cache: FakeService(),
+    )
+
+    fmk = route_url("https://www.fmkorea.com/football_world")
+    arca = route_url("https://arca.live/b/rogersfu")
+    resources = [
+        await app_module.create_reader_resources(fmk),
+        await app_module.create_reader_resources(fmk),
+        await app_module.create_reader_resources(arca),
+    ]
+    for resource in resources:
+        await resource.raw_client.aclose()
+        resource.cache.close()
+
+    assert states[0] is states[1]
+    assert states[0] is not states[2]
+    assert states[0] is not None
+
+
+async def test_stale_generation_cleanup_failure_is_reported_and_retried_on_unmount() -> None:
+    class FlakyRaw:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise RuntimeError("stale raw close failed")
+
+    class Cache:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    raw = FlakyRaw()
+    cache = Cache()
+    target = route_url("https://www.fmkorea.com/football_world")
+    resources = ReaderResources(raw, cache, adapter_for(target), FakeService())
+
+    class StaleCleanupApp(CommunityReaderApp):
+        def __init__(self) -> None:
+            self.notices: list[str] = []
+            super().__init__(
+                service=FakeService(),
+                resource_factory=lambda selected: resources,
+            )
+
+        def notify(self, message: str, **_: object) -> None:
+            self.notices.append(message)
+
+    app = StaleCleanupApp()
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await settle(app, pilot)
+        app._activation_generation += 1
+        stale_generation = app._activation_generation - 1
+        app._activate_target(target, None, stale_generation)
+        await app.workers.wait_for_complete()
+
+        assert raw.close_calls == 1
+        assert cache.close_calls == 1
+        assert app.notices == [
+            "사용하지 않는 리소스를 닫는 중 오류가 발생했습니다: "
+            "stale raw close failed"
+        ]
+
+    assert raw.close_calls == 2
+    assert cache.close_calls == 1
+
+
 async def test_down_and_enter_load_selected_post_and_render_article() -> None:
     service = FakeService()
     app = CommunityReaderApp(service=service)
@@ -837,7 +973,7 @@ async def test_resource_factory_closes_partial_resources_on_failure(
     monkeypatch.setattr(
         app_module,
         "CommunityHttpClient",
-        lambda client, policy: object(),
+        lambda client, policy, state=None: object(),
     )
 
     original = ValueError("service construction failed")

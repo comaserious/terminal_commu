@@ -1,11 +1,69 @@
 from dataclasses import dataclass
+import re
 from typing import ClassVar
+from urllib.parse import parse_qs, urljoin, urlsplit
+
+from bs4 import BeautifulSoup
 
 from fmk_reader.adapters.base import RequestPolicy
 from fmk_reader.errors import ParseError
 from fmk_reader.models import Comment, PageResult, PostDetail, PostSummary
 from fmk_reader.parser import parse_board, parse_post
 from fmk_reader.targets import CommunityTarget, Site
+
+
+_BASE_URL = "https://www.fmkorea.com"
+_BOARD_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
+
+
+def _board_from_url(href: str) -> str | None:
+    try:
+        parsed = urlsplit(urljoin(_BASE_URL, href.strip()))
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "www.fmkorea.com"
+        or port not in (None, 443)
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return None
+
+    query_mid = parse_qs(parsed.query).get("mid", [])
+    if len(query_mid) == 1 and _BOARD_ID.fullmatch(query_mid[0]):
+        return query_mid[0]
+
+    segments = parsed.path.strip("/").split("/")
+    if (
+        len(segments) == 1
+        and _BOARD_ID.fullmatch(segments[0])
+        and not segments[0].isdecimal()
+    ):
+        return segments[0]
+    return None
+
+
+def _returned_board_identities(html: str) -> set[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    identities: set[str] = set()
+    selectors = (
+        "link[rel~='canonical'][href]",
+        ".bd_tl a[href]",
+        ".tl_srch a.category[href]",
+    )
+    for selector in selectors:
+        for marker in soup.select(selector):
+            identity = _board_from_url(str(marker.get("href", "")))
+            if identity is not None:
+                identities.add(identity)
+
+    for marker in soup.select("form.bd_pg input[name='mid'][value]"):
+        value = str(marker.get("value", ""))
+        if _BOARD_ID.fullmatch(value):
+            identities.add(value)
+    return identities
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,12 +112,38 @@ class FmkAdapter:
         )
 
     def parse_board(self, html: str, page: int) -> PageResult[PostSummary]:
-        return parse_board(html, page=page)
+        try:
+            self._validate_board_identity(html)
+            return parse_board(html, page=page)
+        except ParseError as error:
+            raise self._site_parse_error(error) from error
 
     def parse_post(
         self, html: str, post: PostSummary, cpage: int
     ) -> tuple[PostDetail, PageResult[Comment]]:
-        detail, comments = parse_post(html, post.url, cpage=cpage)
-        if detail.summary.post_id != post.post_id:
-            raise ParseError("post id mismatch")
-        return detail, comments
+        try:
+            self._validate_board_identity(html)
+            detail, comments = parse_post(html, post.url, cpage=cpage)
+            if detail.summary.post_id != post.post_id:
+                raise ParseError("post id mismatch")
+            return detail, comments
+        except ParseError as error:
+            raise self._site_parse_error(error) from error
+
+    def _validate_board_identity(self, html: str) -> None:
+        identities = _returned_board_identities(html)
+        if not identities:
+            raise ParseError("returned page has no trustworthy board identity")
+        if identities != {self.target.board_id}:
+            returned = ", ".join(repr(value) for value in sorted(identities))
+            raise ParseError(
+                f"returned board {returned} does not match "
+                f"'{self.target.board_id}'"
+            )
+
+    @staticmethod
+    def _site_parse_error(error: ParseError) -> ParseError:
+        message = str(error)
+        if message.startswith("FMKorea: "):
+            return error
+        return ParseError(f"FMKorea: {message}")

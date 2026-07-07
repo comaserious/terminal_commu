@@ -2,6 +2,7 @@ import asyncio
 import math
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 
 import httpx
@@ -10,8 +11,35 @@ from bs4 import BeautifulSoup
 from fmk_reader.adapters.base import RequestPolicy
 from fmk_reader.adapters.fmk import FmkAdapter
 from fmk_reader.errors import AccessBlocked, FetchError, RateLimited
+from fmk_reader.targets import Site
 
 FMK_POLICY = FmkAdapter.policy
+
+
+@dataclass(slots=True)
+class CommunityRequestState:
+    """Request timing and cooldown state shared by clients for one site."""
+
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    last_started: float | None = None
+    retry_not_before: float | None = None
+
+
+class RequestStateRegistry:
+    """Own one request state per site for the registry's lifetime."""
+
+    def __init__(self) -> None:
+        self._states: dict[Site, CommunityRequestState] = {}
+
+    def state_for(self, site: Site) -> CommunityRequestState:
+        state = self._states.get(site)
+        if state is None:
+            state = CommunityRequestState()
+            self._states[site] = state
+        return state
+
+
+DEFAULT_REQUEST_STATE_REGISTRY = RequestStateRegistry()
 
 
 class CommunityHttpClient:
@@ -32,6 +60,8 @@ class CommunityHttpClient:
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         wall_clock: Callable[[], float] = time.time,
+        *,
+        state: CommunityRequestState | None = None,
     ) -> None:
         if min_interval is None:
             min_interval = policy.min_interval
@@ -46,12 +76,10 @@ class CommunityHttpClient:
         self._clock = clock
         self._sleep = sleep
         self._wall_clock = wall_clock
-        self._last_started: float | None = None
-        self._retry_not_before: float | None = None
-        self._lock = asyncio.Lock()
+        self._state = state or CommunityRequestState()
 
     async def get_text(self, url: str) -> str:
-        async with self._lock:
+        async with self._state.lock:
             self._raise_if_cooling_down()
             try:
                 response = await self._request(url)
@@ -116,8 +144,11 @@ class CommunityHttpClient:
     async def _wait_for_turn(self) -> None:
         now = self._clock()
         not_before = now
-        if self._last_started is not None:
-            not_before = max(not_before, self._last_started + self._min_interval)
+        if self._state.last_started is not None:
+            not_before = max(
+                not_before,
+                self._state.last_started + self._min_interval,
+            )
 
         delay = not_before - now
         if delay <= 0:
@@ -129,9 +160,9 @@ class CommunityHttpClient:
             )
 
     def _raise_if_cooling_down(self) -> None:
-        if self._retry_not_before is None:
+        if self._state.retry_not_before is None:
             return
-        remaining = math.ceil(self._retry_not_before - self._clock())
+        remaining = math.ceil(self._state.retry_not_before - self._clock())
         if remaining > 0:
             raise RateLimited(self._site_name, str(remaining))
 
@@ -141,7 +172,7 @@ class CommunityHttpClient:
             if self._origin(httpx.URL(current_url)) not in self._policy.allowed_origins:
                 raise FetchError(f"{self._site_name} rejected request origin")
             await self._wait_for_turn()
-            self._last_started = self._clock()
+            self._state.last_started = self._clock()
             response = await self._send_without_state(current_url)
             if response.status_code not in self._REDIRECT_STATUSES:
                 return response
@@ -212,7 +243,11 @@ class CommunityHttpClient:
                 return
 
         if delay > 0:
-            self._retry_not_before = self._clock() + delay
+            deadline = self._clock() + delay
+            current = self._state.retry_not_before
+            self._state.retry_not_before = (
+                deadline if current is None else max(current, deadline)
+            )
 
 
 def _headers_for_policy(policy: RequestPolicy) -> dict[str, str]:

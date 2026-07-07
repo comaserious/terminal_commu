@@ -100,12 +100,61 @@ def test_fmk_adapter_has_no_direct_post_for_board_target() -> None:
 def test_fmk_adapter_rejects_mismatched_parsed_article_id() -> None:
     adapter = FmkAdapter(route_url("https://www.fmkorea.com/football_world"))
 
-    with pytest.raises(ParseError, match="^post id mismatch$"):
+    with pytest.raises(ParseError, match="^FMKorea: post id mismatch$"):
         adapter.parse_post(
             (FIXTURES / "post.html").read_text(encoding="utf-8"),
             _post("999"),
             cpage=1,
         )
+
+
+def test_fmk_adapter_rejects_board_html_from_another_board() -> None:
+    adapter = FmkAdapter(route_url("https://www.fmkorea.com/football_world"))
+    html = (FIXTURES / "board.html").read_text(encoding="utf-8").replace(
+        "https://www.fmkorea.com/football_world",
+        "https://www.fmkorea.com/baseball",
+        1,
+    )
+
+    with pytest.raises(
+        ParseError,
+        match="^FMKorea: returned board 'baseball' does not match 'football_world'$",
+    ):
+        adapter.parse_board(html, page=1)
+
+
+def test_fmk_adapter_rejects_direct_article_html_from_another_board() -> None:
+    adapter = FmkAdapter(route_url("https://www.fmkorea.com/100"))
+    post = adapter.direct_post()
+    assert post is not None
+    html = (FIXTURES / "post.html").read_text(encoding="utf-8").replace(
+        "mid=football_world",
+        "mid=baseball",
+        1,
+    )
+
+    with pytest.raises(
+        ParseError,
+        match="^FMKorea: returned board 'baseball' does not match 'football_world'$",
+    ):
+        adapter.parse_post(html, post, cpage=1)
+
+
+def test_fmk_adapter_requires_a_trustworthy_board_marker() -> None:
+    adapter = FmkAdapter(route_url("https://www.fmkorea.com/100"))
+    post = adapter.direct_post()
+    assert post is not None
+    html = (FIXTURES / "post.html").read_text(encoding="utf-8").replace(
+        "/index.php?mid=football_world&amp;category=1798914341",
+        "#",
+        1,
+    )
+
+    with pytest.raises(
+        ParseError,
+        match="^FMKorea: returned page has no trustworthy board identity$",
+    ):
+        adapter.parse_post(html, post, cpage=1)
 
 
 def _post(post_id: str) -> PostSummary:

@@ -135,11 +135,13 @@ def _comment_depth(item: Tag) -> int:
     raw_depth = str(item.get("data-depth", wrapper.get("data-depth", "")))
     if raw_depth.isdecimal():
         return int(raw_depth)
+    nested_depth = len(wrapper.find_parents(class_="comment-wrapper"))
+    if nested_depth:
+        return nested_depth
     classes = set(item.get("class", [])) | set(wrapper.get("class", []))
     if classes.intersection({"reply", "comment-reply", "child"}):
         return 1
-    nested_depth = len(wrapper.find_parents(class_="comment-wrapper"))
-    return 1 if nested_depth else 0
+    return 0
 
 
 def _linked_board_page(href: str, board_id: str) -> int | None:
