@@ -141,9 +141,11 @@ remote text remains `markup=False` everywhere.
 
 Media nodes are converted by adapters into placeholders:
 
-- ordinary images and videos: `[이미지]` and `[동영상]`;
-- DCInside DCCons: `[디시콘]`;
-- Arca emoticons: `[이모티콘]`.
+- FMKorea images and videos: `[이미지 생략]` and `[동영상 생략]`;
+- DCInside images, videos, and DCCons: `[이미지]`, `[동영상]`, and
+  `[디시콘]`;
+- Arca Live images, videos, and emoticons: `[이미지]`, `[동영상]`, and
+  `[이모티콘]`.
 
 Reply depth is preserved where public HTML exposes it. The shared UI may indent
 replies but does not attempt to reconstruct relationships that a site omits.
