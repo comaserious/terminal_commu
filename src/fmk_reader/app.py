@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 import inspect
@@ -122,7 +123,9 @@ class CommunityReaderApp(App[None]):
         super().__init__()
         if service is not None and target is None:
             target = route_url(RECOMMENDED_URLS[Site.FMKOREA])
-        self.target = target
+        self.target: CommunityTarget | None = None
+        self._initial_target = target
+        self._injected_service = service
         self.raw_client = None
         self.cache = None
         self.adapter: CommunityAdapter | None = None
@@ -130,7 +133,7 @@ class CommunityReaderApp(App[None]):
         self._owns_resources = False
         self._raw_client_closed = False
         self._cache_closed = False
-        self.service = service
+        self.service: ReaderService | None = None
 
         self.board_page = 1
         self.comment_page = 1
@@ -146,6 +149,9 @@ class CommunityReaderApp(App[None]):
         self._pending_post_key: tuple[str, int] | None = None
         self._direct_start = False
         self._switch_in_progress = False
+        self._activation_generation = 0
+        self._activation_in_progress = False
+        self._reader_unusable = False
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -161,38 +167,93 @@ class CommunityReaderApp(App[None]):
                 yield Static("", id="article-content", markup=False)
         yield Footer()
 
-    async def on_mount(self) -> None:
+    def on_mount(self) -> None:
         self._sync_layout(self.size.width)
         self.query_one("#post-list", ListView).focus()
-        if self.target is None:
-            self.push_screen(LauncherScreen(), self._accept_target)
+        if self._initial_target is None:
+            self._open_launcher()
             return
-        await self._activate_target(self.target)
+        self._begin_activation(self._initial_target, self._injected_service)
 
     async def on_unmount(self) -> None:
+        self._activation_generation += 1
+        self._activation_in_progress = False
         await self._release_owned_resources()
 
-    async def _accept_target(self, target: CommunityTarget | None) -> None:
+    def _accept_target(self, target: CommunityTarget | None) -> None:
         if target is None:
             return
-        self.target = target
-        await self._activate_target(target)
+        self._begin_activation(target)
 
-    async def _activate_target(self, target: CommunityTarget) -> None:
-        if self.service is None:
-            resources = self._resource_factory(target)
-            if inspect.isawaitable(resources):
-                resources = await resources
+    def _begin_activation(
+        self,
+        target: CommunityTarget,
+        injected_service: ReaderService | None = None,
+    ) -> None:
+        self._activation_generation += 1
+        generation = self._activation_generation
+        self._activation_in_progress = True
+        self._show_activation_loading()
+        self._activate_target(target, injected_service, generation)
+
+    @work(exclusive=True, group="activation")
+    async def _activate_target(
+        self,
+        target: CommunityTarget,
+        injected_service: ReaderService | None,
+        generation: int,
+    ) -> None:
+        resources: ReaderResources | None = None
+        try:
+            if injected_service is None:
+                pending_resources = self._resource_factory(target)
+                resources = (
+                    await pending_resources
+                    if inspect.isawaitable(pending_resources)
+                    else pending_resources
+                )
+                adapter = resources.adapter
+                service: ReaderService = resources.service
+            else:
+                adapter = adapter_for(target)
+                service = injected_service
+            direct_post = adapter.direct_post()
+        except asyncio.CancelledError:
+            if generation == self._activation_generation:
+                self._activation_in_progress = False
+            raise
+        except Exception as error:
+            if resources is not None:
+                await self._discard_resources(resources, error)
+            if generation == self._activation_generation:
+                self._activation_in_progress = False
+                self._clear_uncommitted_activation()
+                self.notify(
+                    f"커뮤니티를 준비하지 못했습니다: {error}",
+                    severity="error",
+                    markup=False,
+                )
+                self._open_launcher()
+            return
+
+        if generation != self._activation_generation:
+            if resources is not None:
+                await self._discard_resources(resources)
+            return
+
+        self.target = target
+        self.adapter = adapter
+        self.service = service
+        if resources is not None:
             self.raw_client = resources.raw_client
             self.cache = resources.cache
-            self.adapter = resources.adapter
-            self.service = resources.service
             self._owns_resources = True
             self._raw_client_closed = False
             self._cache_closed = False
-        elif self.adapter is None:
-            self.adapter = adapter_for(target)
-        direct_post = self.adapter.direct_post()
+        self._initial_target = None
+        self._injected_service = None
+        self._reader_unusable = False
+        self._activation_in_progress = False
         if direct_post is None:
             self.load_board()
             return
@@ -206,6 +267,46 @@ class CommunityReaderApp(App[None]):
         self.query_one("#main", Horizontal).add_class("reading")
         self.query_one("#article-pane", ArticlePane).focus()
         self.load_post(post=direct_post, target_page=1)
+
+    async def _discard_resources(
+        self,
+        resources: ReaderResources,
+        original_error: BaseException | None = None,
+    ) -> None:
+        cleanup_errors: list[BaseException] = []
+        try:
+            await resources.raw_client.aclose()
+        except BaseException as error:
+            cleanup_errors.append(error)
+        try:
+            resources.cache.close()
+        except BaseException as error:
+            cleanup_errors.append(error)
+        if original_error is not None:
+            for cleanup_error in cleanup_errors:
+                original_error.add_note(f"Cleanup error: {cleanup_error}")
+
+    def _show_activation_loading(self) -> None:
+        self.default_screen.query_one("#main", Horizontal).remove_class("reading")
+        self.default_screen.query_one("#article-title", Static).update(
+            "커뮤니티 준비 중"
+        )
+        self.default_screen.query_one("#article-meta", Static).update("준비 중...")
+        self.default_screen.query_one("#article-content", Static).update("")
+        self.sub_title = "커뮤니티 준비 중"
+
+    def _clear_uncommitted_activation(self) -> None:
+        self.target = None
+        self.adapter = None
+        self.service = None
+        self.raw_client = None
+        self.cache = None
+        self._owns_resources = False
+
+    def _open_launcher(self) -> None:
+        if isinstance(self.screen, LauncherScreen):
+            return
+        self.push_screen(LauncherScreen(), self._accept_target)
 
     async def _release_owned_resources(self) -> None:
         if not self._owns_resources:
@@ -242,6 +343,8 @@ class CommunityReaderApp(App[None]):
         *,
         target_page: int | None = None,
     ) -> None:
+        if not self._reader_is_usable():
+            return
         target = self.board_page if target_page is None else target_page
         if self._pending_board_page == target and not refresh:
             return
@@ -290,7 +393,7 @@ class CommunityReaderApp(App[None]):
                 self._pending_board_page = None
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if not isinstance(event.item, PostItem):
+        if not self._reader_is_usable() or not isinstance(event.item, PostItem):
             return
         self.current_post = event.item.post
         self.comment_page = 1
@@ -311,6 +414,8 @@ class CommunityReaderApp(App[None]):
         post: PostSummary | None = None,
         target_page: int | None = None,
     ) -> None:
+        if not self._reader_is_usable():
+            return
         selected_post = self.current_post if post is None else post
         if selected_post is None:
             return
@@ -418,7 +523,7 @@ class CommunityReaderApp(App[None]):
         )
 
     def action_previous_page(self) -> None:
-        if not self._reader_is_active():
+        if not self._reader_is_usable():
             return
         if self.query_one("#post-list", ListView).has_focus:
             if self.board_has_previous:
@@ -431,7 +536,7 @@ class CommunityReaderApp(App[None]):
             self.load_post(target_page=self.comment_page - 1)
 
     def action_next_page(self) -> None:
-        if not self._reader_is_active():
+        if not self._reader_is_usable():
             return
         if self.query_one("#post-list", ListView).has_focus:
             if self.board_has_next:
@@ -445,7 +550,7 @@ class CommunityReaderApp(App[None]):
             self.load_post(target_page=self.comment_page + 1)
 
     def action_refresh(self) -> None:
-        if not self._reader_is_active():
+        if not self._reader_is_usable():
             return
         if (
             self.current_post is not None
@@ -456,7 +561,7 @@ class CommunityReaderApp(App[None]):
             self.load_board(refresh=True)
 
     def action_back(self) -> None:
-        if not self._reader_is_active():
+        if not self._reader_is_usable():
             return
         self.query_one("#main", Horizontal).remove_class("reading")
         self.query_one("#post-list", ListView).focus()
@@ -466,7 +571,11 @@ class CommunityReaderApp(App[None]):
             self.load_board()
 
     async def action_switch_site(self) -> None:
-        if not self._reader_is_active() or self._switch_in_progress:
+        if (
+            not self._reader_is_active()
+            or self._activation_in_progress
+            or self._switch_in_progress
+        ):
             return
         self._switch_in_progress = True
         try:
@@ -480,6 +589,7 @@ class CommunityReaderApp(App[None]):
         try:
             await self._release_owned_resources()
         except Exception as error:
+            self._reader_unusable = True
             self.notify(
                 f"리소스를 닫는 중 오류가 발생했습니다: {error}",
                 severity="error",
@@ -502,6 +612,16 @@ class CommunityReaderApp(App[None]):
     def _reader_is_active(self) -> bool:
         return self.screen is self.default_screen
 
+    def _reader_is_usable(self) -> bool:
+        return (
+            self._reader_is_active()
+            and not self._activation_in_progress
+            and not self._reader_unusable
+            and self.target is not None
+            and self.adapter is not None
+            and self.service is not None
+        )
+
     def _reset_reader_state(self) -> None:
         self.board_page = 1
         self.comment_page = 1
@@ -516,6 +636,7 @@ class CommunityReaderApp(App[None]):
         self._pending_board_page = None
         self._pending_post_key = None
         self._direct_start = False
+        self._reader_unusable = False
 
     def on_resize(self, event: events.Resize) -> None:
         self._sync_layout(event.size.width)

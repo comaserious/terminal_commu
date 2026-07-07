@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 from textual.containers import Vertical
 from textual.widgets import Input, OptionList, Static
 
 from fmk_reader.app import CommunityReaderApp, ReaderResources
+from fmk_reader.adapters import adapter_for
 from fmk_reader.launcher import LauncherScreen
 from fmk_reader.models import PageResult, PostSummary
 from fmk_reader.service import DataSource, LoadResult
@@ -63,6 +65,39 @@ class FakeResourceFactory:
             adapter=FakeAdapter(target),
             service=service,
         )
+
+
+class SuspendedFactory:
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self.error = error
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.calls: list[CommunityTarget] = []
+        self.raw_client = FakeRawClient()
+        self.cache = FakeCache()
+        self.service = FakeService()
+
+    async def __call__(self, target: CommunityTarget) -> ReaderResources:
+        self.calls.append(target)
+        self.started.set()
+        await self.release.wait()
+        if self.error is not None:
+            raise self.error
+        return ReaderResources(
+            self.raw_client,
+            self.cache,
+            adapter_for(target),
+            self.service,
+        )
+
+
+class ActivationNoticeApp(CommunityReaderApp):
+    def __init__(self, factory: SuspendedFactory) -> None:
+        self.notices: list[str] = []
+        super().__init__(resource_factory=factory)
+
+    def notify(self, message: str, **_: object) -> None:
+        self.notices.append(message)
 
 
 async def test_launcher_recommended_arca_flow_returns_target() -> None:
@@ -170,3 +205,75 @@ async def test_launcher_fits_inside_narrow_terminal() -> None:
         assert launcher.region.x >= 0
         assert launcher.region.right <= app.size.width
         assert launcher.region.width <= app.size.width
+
+
+async def test_suspended_activation_is_atomic_and_reader_keys_are_inert() -> None:
+    factory = SuspendedFactory()
+    app = CommunityReaderApp(resource_factory=factory)
+
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        selection_task = asyncio.create_task(pilot.press("enter"))
+        key_task: asyncio.Task[None] | None = None
+        try:
+            await asyncio.wait_for(factory.started.wait(), timeout=1)
+            await asyncio.wait_for(asyncio.shield(selection_task), timeout=0.5)
+
+            assert app.target is None
+            assert app.adapter is None
+            assert app.service is None
+            assert app.raw_client is None
+            assert app.cache is None
+            assert "준비 중" in str(
+                app.default_screen.query_one("#article-meta", Static).render()
+            )
+
+            key_task = asyncio.create_task(
+                pilot.press("r", "left", "right", "enter", "s")
+            )
+            await asyncio.wait_for(asyncio.shield(key_task), timeout=0.5)
+            assert app.screen is app.default_screen
+            assert factory.calls == [
+                route_url("https://www.fmkorea.com/football_world")
+            ]
+            assert factory.service.board_calls == []
+        finally:
+            factory.release.set()
+            await selection_task
+            if key_task is not None:
+                await key_task
+
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        expected = route_url("https://www.fmkorea.com/football_world")
+        assert app.target == expected
+        assert app.adapter is not None
+        assert app.service is factory.service
+        assert app.raw_client is factory.raw_client
+        assert app.cache is factory.cache
+        assert factory.service.board_calls == [(1, False)]
+
+
+async def test_suspended_factory_error_reopens_one_launcher_without_resources() -> None:
+    factory = SuspendedFactory(error=RuntimeError("factory failed"))
+    app = ActivationNoticeApp(factory)
+
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        selection_task = asyncio.create_task(pilot.press("enter"))
+        await asyncio.wait_for(factory.started.wait(), timeout=1)
+        factory.release.set()
+        await selection_task
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert app.target is None
+        assert app.adapter is None
+        assert app.service is None
+        assert app.raw_client is None
+        assert app.cache is None
+        assert not app._owns_resources
+        assert app.notices == ["커뮤니티를 준비하지 못했습니다: factory failed"]
+        assert sum(
+            isinstance(screen, LauncherScreen) for screen in app.screen_stack
+        ) == 1

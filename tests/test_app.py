@@ -318,6 +318,7 @@ class SwitchFactory:
         self.created: list[CommunityTarget] = []
         self.raw_clients: list[SwitchRawClient] = []
         self.caches: list[SwitchCache] = []
+        self.services: list[FakeService] = []
 
     def __call__(self, target: CommunityTarget) -> ReaderResources:
         raw = SwitchRawClient()
@@ -325,7 +326,9 @@ class SwitchFactory:
         self.created.append(target)
         self.raw_clients.append(raw)
         self.caches.append(cache)
-        return ReaderResources(raw, cache, adapter_for(target), FakeService())
+        service = FakeService()
+        self.services.append(service)
+        return ReaderResources(raw, cache, adapter_for(target), service)
 
 
 class CleanupNoticeApp(CommunityReaderApp):
@@ -390,7 +393,9 @@ async def test_failed_switch_cleanup_is_retryable_without_nested_launcher(
             self.created.append(target)
             self.raw_clients.append(raw)
             self.caches.append(cache)
-            return ReaderResources(raw, cache, adapter_for(target), FakeService())
+            service = FakeService()
+            self.services.append(service)
+            return ReaderResources(raw, cache, adapter_for(target), service)
 
     factory = FlakyFactory()
     target = route_url("https://www.fmkorea.com/football_world")
@@ -412,6 +417,19 @@ async def test_failed_switch_cleanup_is_retryable_without_nested_launcher(
         assert app.screen is app.default_screen
         assert len(factory.created) == 1
         assert app.notices == [f"리소스를 닫는 중 오류가 발생했습니다: {failing_resource} close failed"]
+
+        service = factory.services[0]
+        board_calls = list(service.board_calls)
+        post_calls = list(service.post_calls)
+        await pilot.press("r", "left", "right", "enter")
+        app.load_board(refresh=True)
+        app.load_post(post=POSTS[0])
+        await pilot.pause()
+
+        assert app.is_running
+        assert service.board_calls == board_calls
+        assert service.post_calls == post_calls
+        assert len(factory.created) == 1
 
         await pilot.press("s")
         await pilot.pause()
