@@ -38,3 +38,16 @@ def test_public_readme_has_portable_installation() -> None:
     assert "python -m pip install -e '.[dev]'" in readme
     assert "python -m pytest -q" in readme
     assert "python -m ruff check ." in readme
+    assert "기존 `fmk` 명령" not in readme
+    assert "python -m pip uninstall fmk-reader" in readme
+    assert "~/.cache/commu/cache.db" in readme
+    assert "~/.cache/fmk-reader/cache.db" not in readme
+
+
+def test_pyproject_is_not_ignored() -> None:
+    ignored = {
+        line.strip()
+        for line in (ROOT / ".gitignore").read_text().splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    assert "pyproject.toml" not in ignored
