@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from typing import Protocol
 
-from fmk_reader.models import Comment, PageResult, PostDetail, PostSummary
-from fmk_reader.targets import CommunityTarget, Site
+from commu.models import Comment, PageResult, PostDetail, PostSummary
+from commu.targets import CommunityTarget, Site
 
 
 @dataclass(frozen=True, slots=True)

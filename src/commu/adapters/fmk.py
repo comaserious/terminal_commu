@@ -5,11 +5,11 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
-from fmk_reader.adapters.base import RequestPolicy
-from fmk_reader.errors import ParseError
-from fmk_reader.models import Comment, PageResult, PostDetail, PostSummary
-from fmk_reader.parser import parse_board, parse_post
-from fmk_reader.targets import CommunityTarget, Site
+from commu.adapters.base import RequestPolicy
+from commu.errors import ParseError
+from commu.models import Comment, PageResult, PostDetail, PostSummary
+from commu.parser import parse_board, parse_post
+from commu.targets import CommunityTarget, Site
 
 
 _BASE_URL = "https://www.fmkorea.com"
@@ -73,7 +73,7 @@ class FmkAdapter:
     site_name: ClassVar[str] = "FMKorea"
     policy: ClassVar[RequestPolicy] = RequestPolicy(
         site=Site.FMKOREA,
-        user_agent="fmk-reader/0.1 personal read-only client",
+        user_agent="commu/0.1 personal read-only client",
         allowed_origins=frozenset({("https", "www.fmkorea.com", 443)}),
         rate_limit_statuses=frozenset({429, 430}),
     )

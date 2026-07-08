@@ -15,18 +15,18 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
-from fmk_reader.adapters import CommunityAdapter, adapter_for
-from fmk_reader.cache import JsonCache
-from fmk_reader.client import (
+from commu.adapters import CommunityAdapter, adapter_for
+from commu.cache import JsonCache
+from commu.client import (
     DEFAULT_REQUEST_STATE_REGISTRY,
     CommunityHttpClient,
     make_httpx_client,
 )
-from fmk_reader.errors import ReaderError
-from fmk_reader.launcher import LauncherScreen
-from fmk_reader.models import Comment, PageResult, PostSummary
-from fmk_reader.service import CommunityService, LoadResult, PostPage
-from fmk_reader.targets import CommunityTarget, RECOMMENDED_URLS, Site, route_url
+from commu.errors import ReaderError
+from commu.launcher import LauncherScreen
+from commu.models import Comment, PageResult, PostSummary
+from commu.service import CommunityService, LoadResult, PostPage
+from commu.targets import CommunityTarget, RECOMMENDED_URLS, Site, route_url
 
 
 class ReaderService(Protocol):
@@ -63,12 +63,17 @@ class ResourceFactory(Protocol):
     ) -> ReaderResources | Awaitable[ReaderResources]: ...
 
 
+def default_cache_path(home: Path | None = None) -> Path:
+    base = Path.home() if home is None else home
+    return base / ".cache" / "commu" / "cache.db"
+
+
 async def create_reader_resources(target: CommunityTarget) -> ReaderResources:
     adapter = adapter_for(target)
     cache: JsonCache | None = None
     raw_client: httpx.AsyncClient | None = None
     try:
-        cache = JsonCache(Path.home() / ".cache" / "fmk-reader" / "cache.db")
+        cache = JsonCache(default_cache_path())
         raw_client = make_httpx_client(adapter.policy)
         service = CommunityService(
             adapter,
@@ -750,6 +755,3 @@ def parse_cli(argv: Sequence[str]) -> CommunityTarget | None:
 def main(argv: Sequence[str] | None = None) -> None:
     arguments = sys.argv[1:] if argv is None else argv
     CommunityReaderApp(target=parse_cli(arguments)).run()
-
-
-FmkReaderApp = CommunityReaderApp

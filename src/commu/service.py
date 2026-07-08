@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Generic, Protocol, TypeVar
 
-from fmk_reader.adapters.base import CommunityAdapter
-from fmk_reader.cache import JsonCache
-from fmk_reader.errors import FetchError, ParseError, RateLimited
-from fmk_reader.models import Comment, PageResult, PostDetail, PostSummary
+from commu.adapters.base import CommunityAdapter
+from commu.cache import JsonCache
+from commu.errors import FetchError, ParseError, RateLimited
+from commu.models import Comment, PageResult, PostDetail, PostSummary
 BOARD_TTL = 60.0
 POST_TTL = 1800.0
 COMMENTS_TTL = 120.0

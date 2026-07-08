@@ -63,6 +63,17 @@ source .venv/bin/activate
 .venv\Scripts\Activate.ps1
 ```
 
+### 기존 버전에서 업그레이드
+
+이전 배포명과 새 배포명이 다르므로 구버전을 제거한 뒤 다시 설치합니다.
+
+```bash
+python -m pip uninstall fmk-reader
+python -m pip install -r requirements.txt
+python -m pip install --no-deps .
+commu --help
+```
+
 ## 실행
 
 인자 없이 실행하면 커뮤니티와 접속 방식을 고르는 시작 메뉴가 열립니다.
@@ -80,8 +91,6 @@ commu https://www.fmkorea.com/football_world
 commu https://gall.dcinside.com/board/lists/?id=football_new9
 commu https://arca.live/b/rogersfu
 ```
-
-기존 `fmk` 명령도 `commu`와 같은 호환 별칭으로 사용할 수 있습니다.
 
 ## 추천 URL
 
@@ -114,7 +123,7 @@ HTTPS URL만 지원합니다. `<gallery>`, `<channel>`은 영문자, 숫자, `_`
 
 ## 캐시와 미디어
 
-캐시는 `~/.cache/fmk-reader/cache.db`에 저장됩니다. 캐시 키에는 사이트와 게시판 식별자가 포함되어 서로 다른 커뮤니티의 같은 글 번호가 충돌하지 않습니다.
+캐시는 `~/.cache/commu/cache.db`에 저장됩니다. 캐시 키에는 사이트와 게시판 식별자가 포함되어 서로 다른 커뮤니티의 같은 글 번호가 충돌하지 않습니다. 이전 `~/.cache/fmk-reader/` 캐시는 재사용하거나 자동 삭제하지 않습니다.
 
 이미지와 동영상은 다운로드하거나 터미널에 표시하지 않고 다음 텍스트로 나타냅니다.
 

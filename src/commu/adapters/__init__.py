@@ -1,10 +1,10 @@
 from typing import assert_never
 
-from fmk_reader.adapters.arca import ArcaAdapter
-from fmk_reader.adapters.base import CommunityAdapter, RequestPolicy
-from fmk_reader.adapters.dcinside import DcinsideAdapter
-from fmk_reader.adapters.fmk import FmkAdapter
-from fmk_reader.targets import CommunityTarget, Site
+from commu.adapters.arca import ArcaAdapter
+from commu.adapters.base import CommunityAdapter, RequestPolicy
+from commu.adapters.dcinside import DcinsideAdapter
+from commu.adapters.fmk import FmkAdapter
+from commu.targets import CommunityTarget, Site
 
 
 def adapter_for(target: CommunityTarget) -> CommunityAdapter:

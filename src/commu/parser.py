@@ -5,8 +5,8 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
-from fmk_reader.errors import ParseError
-from fmk_reader.models import Comment, PageResult, PostDetail, PostSummary
+from commu.errors import ParseError
+from commu.models import Comment, PageResult, PostDetail, PostSummary
 
 
 BASE_URL = "https://www.fmkorea.com"

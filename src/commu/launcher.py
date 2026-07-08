@@ -7,8 +7,8 @@ from textual.screen import Screen
 from textual.widgets import Input, OptionList, Static
 from textual.widgets.option_list import Option
 
-from fmk_reader.errors import TargetError
-from fmk_reader.targets import CommunityTarget, RECOMMENDED_URLS, Site, route_url
+from commu.errors import TargetError
+from commu.targets import CommunityTarget, RECOMMENDED_URLS, Site, route_url
 
 
 class LauncherError(Static):

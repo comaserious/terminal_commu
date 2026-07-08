@@ -8,10 +8,10 @@ from email.utils import parsedate_to_datetime
 import httpx
 from bs4 import BeautifulSoup
 
-from fmk_reader.adapters.base import RequestPolicy
-from fmk_reader.adapters.fmk import FmkAdapter
-from fmk_reader.errors import AccessBlocked, FetchError, RateLimited
-from fmk_reader.targets import Site
+from commu.adapters.base import RequestPolicy
+from commu.adapters.fmk import FmkAdapter
+from commu.errors import AccessBlocked, FetchError, RateLimited
+from commu.targets import Site
 
 FMK_POLICY = FmkAdapter.policy
 

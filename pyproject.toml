@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "fmk-reader"
+name = "commu"
 version = "0.1.0"
 description = "Read supported community boards in a terminal"
 requires-python = ">=3.12,<3.13"
@@ -20,11 +20,10 @@ dev = [
 ]
 
 [project.scripts]
-commu = "fmk_reader.app:main"
-fmk = "fmk_reader.app:main"
+commu = "commu.app:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/fmk_reader"]
+packages = ["src/commu"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

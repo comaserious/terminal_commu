@@ -7,10 +7,10 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 
 from bs4 import BeautifulSoup, Tag
 
-from fmk_reader.adapters.base import RequestPolicy
-from fmk_reader.errors import ParseError
-from fmk_reader.models import Comment, PageResult, PostDetail, PostSummary
-from fmk_reader.targets import CommunityTarget, Site
+from commu.adapters.base import RequestPolicy
+from commu.errors import ParseError
+from commu.models import Comment, PageResult, PostDetail, PostSummary
+from commu.targets import CommunityTarget, Site
 
 
 _BASE_URL = "https://arca.live"
@@ -172,7 +172,7 @@ class ArcaAdapter:
     site_name: ClassVar[str] = "아카라이브"
     policy: ClassVar[RequestPolicy] = RequestPolicy(
         site=Site.ARCA,
-        user_agent="fmk-reader/0.1 personal read-only client",
+        user_agent="commu/0.1 personal read-only client",
         allowed_origins=frozenset({("https", "arca.live", 443)}),
         rate_limit_statuses=frozenset({429}),
         blocked_statuses=frozenset({403}),

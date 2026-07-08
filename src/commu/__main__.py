@@ -1,4 +1,4 @@
-from fmk_reader.app import main
+from commu.app import main
 
 
 if __name__ == "__main__":
