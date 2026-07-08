@@ -4,5 +4,4 @@ __pycache__/
 .pytest_cache/
 docs/
 tests/
-pyproject.toml
 .ruff_cache/
