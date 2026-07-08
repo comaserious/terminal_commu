@@ -34,8 +34,7 @@ cd terminal_community
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-python -m pip install --no-deps .
+python -m pip install .
 commu
 ```
 
@@ -46,8 +45,7 @@ cd terminal_community
 py -3.12 -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-python -m pip install --no-deps .
+python -m pip install .
 commu
 ```
 
@@ -69,8 +67,7 @@ source .venv/bin/activate
 
 ```bash
 python -m pip uninstall fmk-reader
-python -m pip install -r requirements.txt
-python -m pip install --no-deps .
+python -m pip install .
 commu --help
 ```
 
@@ -144,7 +141,7 @@ HTTPS URL만 지원합니다. `<gallery>`, `<channel>`은 영문자, 숫자, `_`
 가상환경이 활성화됐는지 확인하고 패키지를 다시 설치합니다.
 
 ```bash
-python -m pip install --no-deps .
+python -m pip install .
 ```
 
 ### Python 버전 오류
