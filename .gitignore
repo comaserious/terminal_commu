@@ -1,3 +1,8 @@
 .worktrees/
 __pycache__/
 *.py[cod]
+.pytest_cache/
+docs/
+tests/
+pyproject.toml
+.ruff_cache/
