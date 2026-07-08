@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from pathlib import Path
 from typing import Protocol
 
 import pytest
@@ -12,7 +13,7 @@ from textual.widgets import ListView, OptionList, Static
 
 import commu.app as app_module
 from commu.adapters import adapter_for
-from commu.app import CommunityReaderApp, FmkReaderApp, ReaderResources
+from commu.app import CommunityReaderApp, ReaderResources, default_cache_path
 from commu.errors import ReaderError
 from commu.launcher import LauncherScreen
 from commu.models import Comment, PageResult, PostDetail, PostSummary
@@ -253,7 +254,13 @@ def widget_text(widget: Static) -> str:
 def test_app_has_expected_title() -> None:
     app = CommunityReaderApp(service=FakeService())
     assert app.TITLE == "Commu"
-    assert FmkReaderApp is CommunityReaderApp
+    assert not hasattr(app_module, "FmkReaderApp")
+
+
+def test_default_cache_path_uses_commu_product_name() -> None:
+    assert default_cache_path(Path("/home/test")) == Path(
+        "/home/test/.cache/commu/cache.db"
+    )
 
 
 class GatedDirectService(FakeService):

@@ -63,12 +63,17 @@ class ResourceFactory(Protocol):
     ) -> ReaderResources | Awaitable[ReaderResources]: ...
 
 
+def default_cache_path(home: Path | None = None) -> Path:
+    base = Path.home() if home is None else home
+    return base / ".cache" / "commu" / "cache.db"
+
+
 async def create_reader_resources(target: CommunityTarget) -> ReaderResources:
     adapter = adapter_for(target)
     cache: JsonCache | None = None
     raw_client: httpx.AsyncClient | None = None
     try:
-        cache = JsonCache(Path.home() / ".cache" / "fmk-reader" / "cache.db")
+        cache = JsonCache(default_cache_path())
         raw_client = make_httpx_client(adapter.policy)
         service = CommunityService(
             adapter,
@@ -750,6 +755,3 @@ def parse_cli(argv: Sequence[str]) -> CommunityTarget | None:
 def main(argv: Sequence[str] | None = None) -> None:
     arguments = sys.argv[1:] if argv is None else argv
     CommunityReaderApp(target=parse_cli(arguments)).run()
-
-
-FmkReaderApp = CommunityReaderApp

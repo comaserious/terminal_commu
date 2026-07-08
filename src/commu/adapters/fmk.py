@@ -73,7 +73,7 @@ class FmkAdapter:
     site_name: ClassVar[str] = "FMKorea"
     policy: ClassVar[RequestPolicy] = RequestPolicy(
         site=Site.FMKOREA,
-        user_agent="fmk-reader/0.1 personal read-only client",
+        user_agent="commu/0.1 personal read-only client",
         allowed_origins=frozenset({("https", "www.fmkorea.com", 443)}),
         rate_limit_statuses=frozenset({429, 430}),
     )

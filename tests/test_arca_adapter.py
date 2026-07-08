@@ -94,6 +94,7 @@ def test_arca_urls_direct_post_policy_and_routing() -> None:
     assert direct.url == "https://arca.live/b/rogersfu/176096992"
 
     policy = arca.policy
+    assert policy.user_agent == "commu/0.1 personal read-only client"
     assert policy.allowed_origins == frozenset({("https", "arca.live", 443)})
     assert policy.rate_limit_statuses == frozenset({429})
     assert policy.blocked_statuses == frozenset({403})

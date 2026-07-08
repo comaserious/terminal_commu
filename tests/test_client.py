@@ -755,7 +755,7 @@ async def test_default_httpx_client_configuration() -> None:
         assert raw_client.timeout.pool == 10.0
         assert raw_client.timeout.connect == 5.0
         assert raw_client.headers["User-Agent"] == (
-            "fmk-reader/0.1 personal read-only client"
+            "commu/0.1 personal read-only client"
         )
         assert raw_client.headers["Accept-Language"] == "ko-KR,ko;q=0.9"
     finally:

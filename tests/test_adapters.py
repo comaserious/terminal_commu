@@ -62,9 +62,7 @@ def test_fmk_adapter_preserves_board_and_comment_page_urls() -> None:
 def test_fmk_adapter_exposes_strict_request_policy() -> None:
     adapter = FmkAdapter(route_url("https://www.fmkorea.com/football_world"))
 
-    assert adapter.policy.user_agent == (
-        "fmk-reader/0.1 personal read-only client"
-    )
+    assert adapter.policy.user_agent == "commu/0.1 personal read-only client"
     assert adapter.policy.allowed_origins == frozenset(
         {("https", "www.fmkorea.com", 443)}
     )
