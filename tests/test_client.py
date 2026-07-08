@@ -5,15 +5,15 @@ from email.utils import formatdate
 import httpx
 import pytest
 
-from fmk_reader.client import (
+from commu.client import (
     FMK_POLICY,
     CommunityHttpClient,
     CommunityRequestState,
     RequestStateRegistry,
     make_httpx_client,
 )
-from fmk_reader.errors import AccessBlocked, FetchError, RateLimited
-from fmk_reader.targets import Site
+from commu.errors import AccessBlocked, FetchError, RateLimited
+from commu.targets import Site
 
 
 class FakeClock:

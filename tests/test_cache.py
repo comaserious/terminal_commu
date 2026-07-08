@@ -3,8 +3,8 @@ from contextlib import closing
 
 import pytest
 
-import fmk_reader.cache as cache_module
-from fmk_reader.cache import CacheHit, JsonCache
+import commu.cache as cache_module
+from commu.cache import CacheHit, JsonCache
 
 
 def test_get_respects_ttl_and_can_return_stale_values(tmp_path) -> None:

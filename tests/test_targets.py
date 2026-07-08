@@ -1,7 +1,7 @@
 import pytest
 
-from fmk_reader.errors import TargetError
-from fmk_reader.targets import Site, route_url
+from commu.errors import TargetError
+from commu.targets import Site, route_url
 
 
 @pytest.mark.parametrize(

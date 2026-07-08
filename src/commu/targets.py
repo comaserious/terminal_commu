@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from enum import Enum
 from urllib.parse import SplitResult, parse_qs, urlsplit, urlunsplit
 
-from fmk_reader.errors import TargetError
+from commu.errors import TargetError
 
 _IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,80}")
 _DC_DESKTOP_PATHS = {

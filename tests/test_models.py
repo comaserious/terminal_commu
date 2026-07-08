@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from fmk_reader.models import Comment, PageResult, PostDetail, PostSummary
+from commu.models import Comment, PageResult, PostDetail, PostSummary
 
 
 def make_post() -> PostSummary:

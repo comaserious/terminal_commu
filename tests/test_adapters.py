@@ -2,12 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from fmk_reader.adapters import adapter_for
-from fmk_reader.adapters.arca import ArcaAdapter
-from fmk_reader.adapters.fmk import FmkAdapter
-from fmk_reader.errors import ParseError
-from fmk_reader.models import PostSummary
-from fmk_reader.targets import route_url
+from commu.adapters import adapter_for
+from commu.adapters.arca import ArcaAdapter
+from commu.adapters.fmk import FmkAdapter
+from commu.errors import ParseError
+from commu.models import PostSummary
+from commu.targets import route_url
 
 
 FIXTURES = Path(__file__).parent / "fixtures"

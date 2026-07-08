@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from textual.containers import Vertical
 from textual.widgets import Input, OptionList, Static
 
-from fmk_reader.app import CommunityReaderApp, ReaderResources
-from fmk_reader.adapters import adapter_for
-from fmk_reader.launcher import LauncherScreen
-from fmk_reader.models import PageResult, PostSummary
-from fmk_reader.service import DataSource, LoadResult
-from fmk_reader.targets import CommunityTarget, route_url
+from commu.app import CommunityReaderApp, ReaderResources
+from commu.adapters import adapter_for
+from commu.launcher import LauncherScreen
+from commu.models import PageResult, PostSummary
+from commu.service import DataSource, LoadResult
+from commu.targets import CommunityTarget, route_url
 
 
 class FakeRawClient:

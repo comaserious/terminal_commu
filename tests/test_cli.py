@@ -3,10 +3,10 @@ import tomllib
 
 import pytest
 
-import fmk_reader.app as app_module
-from fmk_reader.app import main, parse_cli
-from fmk_reader.errors import TargetError
-from fmk_reader.targets import Site
+import commu.app as app_module
+from commu.app import main, parse_cli
+from commu.errors import TargetError
+from commu.targets import Site
 
 
 def test_parse_cli_without_url_opens_launcher() -> None:
@@ -20,13 +20,10 @@ def test_parse_cli_routes_direct_url() -> None:
     assert target.site is Site.ARCA
 
 
-def test_project_exposes_primary_and_compatibility_commands() -> None:
+def test_project_exposes_only_commu_command() -> None:
     scripts = tomllib.loads(Path("pyproject.toml").read_text())["project"]["scripts"]
 
-    assert scripts == {
-        "commu": "fmk_reader.app:main",
-        "fmk": "fmk_reader.app:main",
-    }
+    assert scripts == {"commu": "commu.app:main"}
 
 
 def test_main_direct_url_bypasses_launcher(monkeypatch: pytest.MonkeyPatch) -> None:

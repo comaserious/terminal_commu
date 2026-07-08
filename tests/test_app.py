@@ -10,14 +10,14 @@ from textual.containers import Horizontal, VerticalScroll
 from textual.pilot import Pilot
 from textual.widgets import ListView, OptionList, Static
 
-import fmk_reader.app as app_module
-from fmk_reader.adapters import adapter_for
-from fmk_reader.app import CommunityReaderApp, FmkReaderApp, ReaderResources
-from fmk_reader.errors import ReaderError
-from fmk_reader.launcher import LauncherScreen
-from fmk_reader.models import Comment, PageResult, PostDetail, PostSummary
-from fmk_reader.service import DataSource, LoadResult, PostPage
-from fmk_reader.targets import CommunityTarget, route_url
+import commu.app as app_module
+from commu.adapters import adapter_for
+from commu.app import CommunityReaderApp, FmkReaderApp, ReaderResources
+from commu.errors import ReaderError
+from commu.launcher import LauncherScreen
+from commu.models import Comment, PageResult, PostDetail, PostSummary
+from commu.service import DataSource, LoadResult, PostPage
+from commu.targets import CommunityTarget, route_url
 
 
 POSTS = (

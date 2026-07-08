@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from fmk_reader.errors import ParseError
-from fmk_reader.parser import parse_board, parse_post
+from commu.errors import ParseError
+from commu.parser import parse_board, parse_post
 
 
 FIXTURES = Path(__file__).parent / "fixtures"

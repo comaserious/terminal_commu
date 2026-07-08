@@ -5,11 +5,11 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
-from fmk_reader.adapters.base import RequestPolicy
-from fmk_reader.errors import ParseError
-from fmk_reader.models import Comment, PageResult, PostDetail, PostSummary
-from fmk_reader.parser import parse_board, parse_post
-from fmk_reader.targets import CommunityTarget, Site
+from commu.adapters.base import RequestPolicy
+from commu.errors import ParseError
+from commu.models import Comment, PageResult, PostDetail, PostSummary
+from commu.parser import parse_board, parse_post
+from commu.targets import CommunityTarget, Site
 
 
 _BASE_URL = "https://www.fmkorea.com"

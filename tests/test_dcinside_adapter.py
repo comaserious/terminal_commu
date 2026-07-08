@@ -3,11 +3,11 @@ from pathlib import Path
 import pytest
 from bs4 import BeautifulSoup
 
-from fmk_reader.adapters import adapter_for
-from fmk_reader.adapters.dcinside import DcinsideAdapter
-from fmk_reader.errors import ParseError
-from fmk_reader.models import PostSummary
-from fmk_reader.targets import route_url
+from commu.adapters import adapter_for
+from commu.adapters.dcinside import DcinsideAdapter
+from commu.errors import ParseError
+from commu.models import PostSummary
+from commu.targets import route_url
 
 
 FIXTURES = Path(__file__).parent / "fixtures"

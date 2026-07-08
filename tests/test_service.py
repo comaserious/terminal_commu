@@ -7,18 +7,18 @@ from pathlib import Path
 
 import pytest
 
-from fmk_reader.adapters.base import RequestPolicy
-from fmk_reader.adapters.fmk import FmkAdapter
-from fmk_reader.cache import JsonCache
-from fmk_reader.errors import AccessBlocked, FetchError, ParseError, RateLimited
-from fmk_reader.models import Comment, PageResult, PostDetail, PostSummary
-from fmk_reader.parser import parse_board, parse_post
-from fmk_reader.service import (
+from commu.adapters.base import RequestPolicy
+from commu.adapters.fmk import FmkAdapter
+from commu.cache import JsonCache
+from commu.errors import AccessBlocked, FetchError, ParseError, RateLimited
+from commu.models import Comment, PageResult, PostDetail, PostSummary
+from commu.parser import parse_board, parse_post
+from commu.service import (
     CommunityService,
     DataSource,
     PostPage,
 )
-from fmk_reader.targets import CommunityTarget, Site, route_url
+from commu.targets import CommunityTarget, Site, route_url
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
