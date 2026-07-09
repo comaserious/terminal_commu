@@ -27,6 +27,7 @@ from commu.launcher import LauncherScreen
 from commu.models import Comment, PageResult, PostSummary
 from commu.service import CommunityService, LoadResult, PostPage
 from commu.targets import CommunityTarget, RECOMMENDED_URLS, Site, route_url
+from commu.url_history import UrlHistory, default_url_history_path
 from commu import work_disguise
 
 
@@ -143,6 +144,7 @@ class CommunityReaderApp(App[None]):
         target: CommunityTarget | None = None,
         service: ReaderService | None = None,
         resource_factory: ResourceFactory | None = None,
+        url_history: UrlHistory | None = None,
     ) -> None:
         super().__init__()
         if service is not None and target is None:
@@ -158,6 +160,7 @@ class CommunityReaderApp(App[None]):
         self._raw_client_closed = False
         self._cache_closed = False
         self.service: ReaderService | None = None
+        self.url_history = url_history or UrlHistory(default_url_history_path())
 
         self.board_page = 1
         self.comment_page = 1
@@ -407,7 +410,7 @@ class CommunityReaderApp(App[None]):
     def _open_launcher(self) -> None:
         if isinstance(self.screen, LauncherScreen):
             return
-        self.push_screen(LauncherScreen(), self._accept_target)
+        self.push_screen(LauncherScreen(self.url_history), self._accept_target)
 
     async def _release_owned_resources(self) -> None:
         if not self._owns_resources:
@@ -735,7 +738,7 @@ class CommunityReaderApp(App[None]):
         self._reader_context = ""
         self.title = self.TITLE
         self.sub_title = ""
-        self.push_screen(LauncherScreen(), self._accept_target)
+        self.push_screen(LauncherScreen(self.url_history), self._accept_target)
 
     def _reader_is_active(self) -> bool:
         return self.screen is self.default_screen

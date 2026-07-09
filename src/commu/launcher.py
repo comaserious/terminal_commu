@@ -9,7 +9,11 @@ from textual.widgets.option_list import Option
 
 from commu.errors import TargetError
 from commu.targets import CommunityTarget, RECOMMENDED_URLS, Site, route_url
+from commu.url_history import UrlHistory, UrlHistoryEntry, default_url_history_path
 from commu import work_disguise
+
+
+_HISTORY_OPTION_PREFIX = "history:"
 
 
 class LauncherError(Static):
@@ -54,10 +58,12 @@ class LauncherScreen(Screen[CommunityTarget]):
         Binding("escape", "back", "뒤로", priority=True),
     ]
 
-    def __init__(self) -> None:
+    def __init__(self, url_history: UrlHistory | None = None) -> None:
         super().__init__()
         self._site: Site | None = None
         self._step = "site"
+        self._url_history = url_history or UrlHistory(default_url_history_path())
+        self._history_entries: tuple[UrlHistoryEntry, ...] = ()
 
     def compose(self) -> ComposeResult:
         with Vertical(id="launcher"):
@@ -79,12 +85,7 @@ class LauncherScreen(Screen[CommunityTarget]):
                 id="launcher-sites",
                 markup=False,
             )
-            access = LauncherOptionList(
-                Option(work_disguise.RECOMMENDED_ACCESS_LABEL, id="recommended"),
-                Option(work_disguise.DIRECT_ACCESS_LABEL, id="direct"),
-                id="launcher-access",
-                markup=False,
-            )
+            access = LauncherOptionList(id="launcher-access", markup=False)
             access.display = False
             yield access
             target_url = Input(
@@ -107,11 +108,7 @@ class LauncherScreen(Screen[CommunityTarget]):
             return
         if event.option_list.id != "launcher-access":
             return
-        if event.option.id == "recommended":
-            assert self._site is not None
-            self.dismiss(route_url(RECOMMENDED_URLS[self._site]))
-        else:
-            self._show_url_input()
+        self._accept_access_option(event.option.id)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "target-url":
@@ -132,13 +129,30 @@ class LauncherScreen(Screen[CommunityTarget]):
             if access.highlighted is None:
                 return
             option = access.get_option_at_index(access.highlighted)
-            if option.id == "recommended":
-                assert self._site is not None
-                self.dismiss(route_url(RECOMMENDED_URLS[self._site]))
-            else:
-                self._show_url_input()
+            self._accept_access_option(option.id)
         else:
             self._submit_url(self.query_one("#target-url", Input).value)
+
+    def _accept_access_option(self, option_id: str | None) -> None:
+        if option_id == "recommended":
+            assert self._site is not None
+            self.dismiss(route_url(RECOMMENDED_URLS[self._site]))
+            return
+        if option_id == "direct":
+            self._show_url_input()
+            return
+        if option_id is None or not option_id.startswith(_HISTORY_OPTION_PREFIX):
+            return
+        try:
+            index = int(option_id.removeprefix(_HISTORY_OPTION_PREFIX))
+            entry = self._history_entries[index]
+        except (ValueError, IndexError):
+            return
+        try:
+            target = self._url_history.record(entry.url)
+        except OSError:
+            target = route_url(entry.url)
+        self.dismiss(target)
 
     def move_option(self, direction: int) -> None:
         option_list = self._active_option_list()
@@ -169,6 +183,10 @@ class LauncherScreen(Screen[CommunityTarget]):
             self.query_one("#launcher-error", Static).update(str(error))
             return
         self.dismiss(target)
+        try:
+            self._url_history.record(value)
+        except OSError:
+            return
 
     def action_back(self) -> None:
         if self._step == "url":
@@ -188,6 +206,21 @@ class LauncherScreen(Screen[CommunityTarget]):
         self._step = "access"
         self.query_one("#launcher-sites", OptionList).display = False
         access = self.query_one("#launcher-access", OptionList)
+        self._history_entries = (
+            () if self._site is None else self._url_history.entries(self._site)
+        )
+        access.clear_options()
+        access.add_option(
+            Option(work_disguise.RECOMMENDED_ACCESS_LABEL, id="recommended")
+        )
+        for index, entry in enumerate(self._history_entries):
+            access.add_option(
+                Option(
+                    f"최근 업무 리소스 · {entry.label}",
+                    id=f"{_HISTORY_OPTION_PREFIX}{index}",
+                )
+            )
+        access.add_option(Option(work_disguise.DIRECT_ACCESS_LABEL, id="direct"))
         access.display = True
         access.highlighted = 0
         self.query_one("#target-url", Input).display = False
