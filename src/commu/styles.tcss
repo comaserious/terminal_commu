@@ -10,14 +10,19 @@ LauncherScreen {
     width: 64;
     max-width: 100%;
     height: auto;
-    max-height: 24;
+    max-height: 28;
     margin: 3 0;
     padding: 1 2;
-    border: round $primary;
+    border: tall $success;
 }
 
 #launcher-title {
     text-style: bold;
+    color: $success;
+}
+
+#launcher-caption {
+    color: $text-muted;
     margin-bottom: 1;
 }
 
@@ -29,7 +34,7 @@ LauncherScreen {
 
 #post-list {
     width: 38%;
-    border-right: solid $primary;
+    border-right: solid $success;
 }
 
 #article-pane {
@@ -39,7 +44,7 @@ LauncherScreen {
 
 #article-title {
     text-style: bold;
-    color: $warning;
+    color: $success;
     margin-bottom: 1;
 }
 

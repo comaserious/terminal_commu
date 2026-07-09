@@ -27,6 +27,7 @@ from commu.launcher import LauncherScreen
 from commu.models import Comment, PageResult, PostSummary
 from commu.service import CommunityService, LoadResult, PostPage
 from commu.targets import CommunityTarget, RECOMMENDED_URLS, Site, route_url
+from commu import work_disguise
 
 
 class ReaderService(Protocol):
@@ -107,9 +108,12 @@ class PostItem(ListItem):
 
     def __init__(self, post: PostSummary) -> None:
         self.post = post
-        text = (
-            f"[{post.category}] {post.title}\n"
-            f"추천 {post.votes} · 댓글 {post.comment_count} · {post.created_at}"
+        text = work_disguise.post_row(
+            category=post.category,
+            title=post.title,
+            votes=post.votes,
+            comment_count=post.comment_count,
+            created_at=post.created_at,
         )
         super().__init__(Label(text, markup=False))
 
@@ -119,7 +123,7 @@ class ArticlePane(VerticalScroll):
 
 
 class CommunityReaderApp(App[None]):
-    TITLE = "Commu"
+    TITLE = work_disguise.APP_TITLE
     CSS_PATH = Path(__file__).with_name("styles.tcss")
     BINDINGS = [
         ("left", "previous_page", "이전 페이지"),
@@ -181,12 +185,20 @@ class CommunityReaderApp(App[None]):
             yield ListView(id="post-list")
             with ArticlePane(id="article-pane"):
                 yield Static(
-                    "글을 선택하세요",
+                    work_disguise.IDLE_TITLE,
                     id="article-title",
                     markup=False,
                 )
-                yield Static("", id="article-meta", markup=False)
-                yield Static("", id="article-content", markup=False)
+                yield Static(
+                    work_disguise.IDLE_META,
+                    id="article-meta",
+                    markup=False,
+                )
+                yield Static(
+                    work_disguise.IDLE_BODY,
+                    id="article-content",
+                    markup=False,
+                )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -269,7 +281,7 @@ class CommunityReaderApp(App[None]):
                 self._activation_in_progress = False
                 self._clear_uncommitted_activation()
                 self.notify(
-                    f"커뮤니티를 준비하지 못했습니다: {error}",
+                    f"업무 데이터 소스를 준비하지 못했습니다: {error}",
                     severity="error",
                     markup=False,
                 )
@@ -294,7 +306,7 @@ class CommunityReaderApp(App[None]):
         self._injected_service = None
         self._reader_unusable = False
         self._activation_in_progress = False
-        self._set_reader_context(adapter.site_name, target.board_id)
+        self._set_reader_context(target.site, target.board_id)
         if direct_post is None:
             self.load_board()
             return
@@ -361,8 +373,8 @@ class CommunityReaderApp(App[None]):
         self._pending_resource_cleanups = retained
         return cleanup_errors
 
-    def _set_reader_context(self, site_name: str, board_id: str) -> None:
-        self._reader_context = f"{site_name} · {board_id}"
+    def _set_reader_context(self, site: Site, board_id: str) -> None:
+        self._reader_context = work_disguise.source_label(site, board_id)
         self.title = f"{self.TITLE} · {self._reader_context}"
         self.sub_title = self._reader_context
 
@@ -374,11 +386,15 @@ class CommunityReaderApp(App[None]):
     def _show_activation_loading(self) -> None:
         self.default_screen.query_one("#main", Horizontal).remove_class("reading")
         self.default_screen.query_one("#article-title", Static).update(
-            "커뮤니티 준비 중"
+            work_disguise.ACTIVATION_TITLE
         )
-        self.default_screen.query_one("#article-meta", Static).update("준비 중...")
-        self.default_screen.query_one("#article-content", Static).update("")
-        self.sub_title = "커뮤니티 준비 중"
+        self.default_screen.query_one("#article-meta", Static).update(
+            work_disguise.ACTIVATION_META
+        )
+        self.default_screen.query_one("#article-content", Static).update(
+            work_disguise.activation_body()
+        )
+        self.sub_title = work_disguise.ACTIVATION_TITLE
 
     def _clear_uncommitted_activation(self) -> None:
         self.target = None
@@ -469,7 +485,10 @@ class CommunityReaderApp(App[None]):
             self.board_has_previous = result.value.has_previous
             self.board_has_next = result.value.has_next
             self.sub_title = self._status_with_context(
-                f"{result.value.page}페이지 · {result.source.value}"
+                work_disguise.board_status(
+                    result.value.page,
+                    result.source.value,
+                )
             )
             if result.warning:
                 self.notify(result.warning, severity="warning", markup=False)
@@ -546,15 +565,23 @@ class CommunityReaderApp(App[None]):
             summary = page.detail.summary
             self.query_one("#article-title", Static).update(summary.title)
             self.query_one("#article-meta", Static).update(
-                f"{summary.author} · {summary.created_at} · 조회 {summary.views} "
-                f"· 추천 {summary.votes} · 댓글 {summary.comment_count}"
+                work_disguise.article_meta(
+                    author=summary.author,
+                    created_at=summary.created_at,
+                    views=summary.views,
+                    votes=summary.votes,
+                    comment_count=summary.comment_count,
+                )
             )
             self.query_one("#article-content", Static).update(
                 self._format_article(page)
             )
             self.sub_title = self._status_with_context(
-                f"글 {summary.post_id} · 댓글 {page.comments.page}페이지 "
-                f"· {result.source.value}"
+                work_disguise.post_status(
+                    summary.post_id,
+                    page.comments.page,
+                    result.source.value,
+                )
             )
             if result.warning:
                 self.notify(
@@ -575,34 +602,42 @@ class CommunityReaderApp(App[None]):
 
     def _show_loading(self, post: PostSummary) -> None:
         self.query_one("#article-title", Static).update(post.title)
-        self.query_one("#article-meta", Static).update("불러오는 중...")
-        self.query_one("#article-content", Static).update("불러오는 중...")
+        self.query_one("#article-meta", Static).update("업무 항목 동기화 중")
+        self.query_one("#article-content", Static).update(
+            work_disguise.loading_body(post.post_id)
+        )
         self.sub_title = self._status_with_context(
-            f"글 {post.post_id} · 불러오는 중"
+            work_disguise.loading_status(post.post_id)
         )
 
     def _show_load_failure(
         self, post: PostSummary, error: ReaderError
     ) -> None:
         self.query_one("#article-title", Static).update(post.title)
-        self.query_one("#article-meta", Static).update("불러오기 실패")
+        self.query_one("#article-meta", Static).update(
+            work_disguise.LOAD_FAILURE_META
+        )
         self.query_one("#article-content", Static).update(
-            f"불러오기 실패: {error}"
+            f"{work_disguise.LOAD_FAILURE_META}: {error}"
         )
         self.sub_title = self._status_with_context(
-            f"글 {post.post_id} · 불러오기 실패"
+            f"업무 항목 {post.post_id} · 동기화 실패"
         )
 
     @staticmethod
     def _format_article(page: PostPage) -> str:
         sections = [page.detail.body]
         if page.detail.links:
-            sections.append("링크\n" + "\n".join(page.detail.links))
+            sections.append(
+                work_disguise.link_heading() + "\n" + "\n".join(page.detail.links)
+            )
         comments = "\n\n".join(
             CommunityReaderApp._format_comment(comment)
             for comment in page.comments.items
         )
-        sections.append(f"댓글 {page.comments.page}페이지\n{comments}")
+        sections.append(
+            f"{work_disguise.comments_heading(page.comments.page)}\n{comments}"
+        )
         return "\n\n".join(sections)
 
     @staticmethod
@@ -693,9 +728,9 @@ class CommunityReaderApp(App[None]):
         self.service = None
         self._reset_reader_state()
         await self.query_one("#post-list", ListView).clear()
-        self.query_one("#article-title", Static).update("글을 선택하세요")
-        self.query_one("#article-meta", Static).update("")
-        self.query_one("#article-content", Static).update("")
+        self.query_one("#article-title", Static).update(work_disguise.IDLE_TITLE)
+        self.query_one("#article-meta", Static).update(work_disguise.IDLE_META)
+        self.query_one("#article-content", Static).update(work_disguise.IDLE_BODY)
         self.query_one("#main", Horizontal).remove_class("reading")
         self._reader_context = ""
         self.title = self.TITLE

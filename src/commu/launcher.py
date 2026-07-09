@@ -9,6 +9,7 @@ from textual.widgets.option_list import Option
 
 from commu.errors import TargetError
 from commu.targets import CommunityTarget, RECOMMENDED_URLS, Site, route_url
+from commu import work_disguise
 
 
 class LauncherError(Static):
@@ -60,25 +61,34 @@ class LauncherScreen(Screen[CommunityTarget]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="launcher"):
-            yield Static("커뮤니티 선택", id="launcher-title", markup=False)
+            yield Static(
+                work_disguise.LAUNCHER_TITLE,
+                id="launcher-title",
+                markup=False,
+            )
+            yield Static(
+                work_disguise.LAUNCHER_CAPTION,
+                id="launcher-caption",
+                markup=False,
+            )
             yield LauncherOptionList(
                 *(
-                    Option(site.display_name, id=site.value)
+                    Option(work_disguise.site_choice_label(site), id=site.value)
                     for site in Site
                 ),
                 id="launcher-sites",
                 markup=False,
             )
             access = LauncherOptionList(
-                Option("추천 게시판", id="recommended"),
-                Option("URL 직접 입력", id="direct"),
+                Option(work_disguise.RECOMMENDED_ACCESS_LABEL, id="recommended"),
+                Option(work_disguise.DIRECT_ACCESS_LABEL, id="direct"),
                 id="launcher-access",
                 markup=False,
             )
             access.display = False
             yield access
             target_url = Input(
-                placeholder="지원하는 게시판 또는 게시글 URL",
+                placeholder=work_disguise.URL_PLACEHOLDER,
                 id="target-url",
             )
             target_url.display = False
