@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Generic, Protocol, TypeVar
 
 from commu.adapters.base import CommunityAdapter
+from commu.adapters.arca import ArcaAdapter
 from commu.cache import JsonCache
 from commu.errors import FetchError, ParseError, RateLimited
 from commu.models import Comment, PageResult, PostDetail, PostSummary
@@ -96,7 +98,14 @@ class CommunityService:
                 return LoadResult(value=cached, source=DataSource.CACHE)
 
         try:
-            html = await self._client.get_text(self.adapter.board_url(page))
+            # Use curl_cffi for Arca.live if available
+            if isinstance(self.adapter, ArcaAdapter) and self.adapter.use_curl_cffi():
+                html = await asyncio.to_thread(
+                    self.adapter.fetch_with_curl_cffi,
+                    self.adapter.board_url(page)
+                )
+            else:
+                html = await self._client.get_text(self.adapter.board_url(page))
             board = self.adapter.parse_board(html, page)
         except FetchError as exc:
             stale = self._cached_board(key, allow_stale=True)
@@ -125,7 +134,14 @@ class CommunityService:
                 return LoadResult(value=cached, source=DataSource.CACHE)
 
         try:
-            html = await self._client.get_text(self.adapter.post_url(post, cpage))
+            # Use curl_cffi for Arca.live if available
+            if isinstance(self.adapter, ArcaAdapter) and self.adapter.use_curl_cffi():
+                html = await asyncio.to_thread(
+                    self.adapter.fetch_with_curl_cffi,
+                    self.adapter.post_url(post, cpage)
+                )
+            else:
+                html = await self._client.get_text(self.adapter.post_url(post, cpage))
             detail, comments = self.adapter.parse_post(html, post, cpage)
             if detail.summary.post_id != post.post_id:
                 raise ParseError("post id mismatch")

@@ -15,6 +15,13 @@ from commu.targets import Site
 
 FMK_POLICY = FmkAdapter.policy
 
+# Try to import curl_cffi for Cloudflare bypass
+try:
+    from curl_cffi import requests as curl_requests
+    CURL_CFFI_AVAILABLE = True
+except ImportError:
+    CURL_CFFI_AVAILABLE = False
+
 
 @dataclass(slots=True)
 class CommunityRequestState:

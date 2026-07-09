@@ -12,8 +12,13 @@ from commu.parser import parse_board, parse_post
 from commu.targets import CommunityTarget, Site
 
 
-_BASE_URL = "https://www.fmkorea.com"
+_BASE_URL = "https://m.fmkorea.com"
 _BOARD_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
+_MOBILE_USER_AGENT = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+    "Version/16.0 Mobile/15E148 Safari/604.1"
+)
 
 
 def _board_from_url(href: str) -> str | None:
@@ -24,7 +29,7 @@ def _board_from_url(href: str) -> str | None:
         return None
     if (
         parsed.scheme != "https"
-        or parsed.hostname != "www.fmkorea.com"
+        or parsed.hostname not in ("m.fmkorea.com", "www.fmkorea.com")
         or port not in (None, 443)
         or parsed.username is not None
         or parsed.password is not None
@@ -73,8 +78,8 @@ class FmkAdapter:
     site_name: ClassVar[str] = "FMKorea"
     policy: ClassVar[RequestPolicy] = RequestPolicy(
         site=Site.FMKOREA,
-        user_agent="commu/0.1 personal read-only client",
-        allowed_origins=frozenset({("https", "www.fmkorea.com", 443)}),
+        user_agent=_MOBILE_USER_AGENT,
+        allowed_origins=frozenset({("https", "m.fmkorea.com", 443), ("https", "www.fmkorea.com", 443)}),
         rate_limit_statuses=frozenset({429, 430}),
     )
 
@@ -82,7 +87,7 @@ class FmkAdapter:
         if page == 1:
             return self.target.board_url
         return (
-            "https://www.fmkorea.com/index.php"
+            f"{_BASE_URL}/index.php"
             f"?mid={self.target.board_id}&page={page}"
         )
 
@@ -90,7 +95,7 @@ class FmkAdapter:
         if cpage == 1:
             return post.url
         return (
-            "https://www.fmkorea.com/index.php"
+            f"{_BASE_URL}/index.php"
             f"?mid={self.target.board_id}"
             f"&document_srl={post.post_id}&cpage={cpage}"
         )
