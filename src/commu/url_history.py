@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from commu.targets import CommunityTarget, Site, route_url
-from commu import work_disguise
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +80,7 @@ def _canonical_url(target: CommunityTarget) -> str:
 
 
 def _entry_label(target: CommunityTarget) -> str:
-    source = work_disguise.source_label(target.site, target.board_id)
+    source = f"{target.site.display_name} · {target.board_id}"
     if target.article_id is None:
         return f"{source} · 목록"
-    return f"{source} · 항목 {target.article_id}"
+    return f"{source} · 글 {target.article_id}"

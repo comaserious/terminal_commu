@@ -10,7 +10,6 @@ from textual.widgets.option_list import Option
 from commu.errors import TargetError
 from commu.targets import CommunityTarget, RECOMMENDED_URLS, Site, route_url
 from commu.url_history import UrlHistory, UrlHistoryEntry, default_url_history_path
-from commu import work_disguise
 
 
 _HISTORY_OPTION_PREFIX = "history:"
@@ -67,19 +66,10 @@ class LauncherScreen(Screen[CommunityTarget]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="launcher"):
-            yield Static(
-                work_disguise.LAUNCHER_TITLE,
-                id="launcher-title",
-                markup=False,
-            )
-            yield Static(
-                work_disguise.LAUNCHER_CAPTION,
-                id="launcher-caption",
-                markup=False,
-            )
+            yield Static("커뮤니티 선택", id="launcher-title", markup=False)
             yield LauncherOptionList(
                 *(
-                    Option(work_disguise.site_choice_label(site), id=site.value)
+                    Option(site.display_name, id=site.value)
                     for site in Site
                 ),
                 id="launcher-sites",
@@ -89,7 +79,7 @@ class LauncherScreen(Screen[CommunityTarget]):
             access.display = False
             yield access
             target_url = Input(
-                placeholder=work_disguise.URL_PLACEHOLDER,
+                placeholder="지원하는 게시판 또는 게시글 URL",
                 id="target-url",
             )
             target_url.display = False
@@ -211,16 +201,16 @@ class LauncherScreen(Screen[CommunityTarget]):
         )
         access.clear_options()
         access.add_option(
-            Option(work_disguise.RECOMMENDED_ACCESS_LABEL, id="recommended")
+            Option("추천 게시판", id="recommended")
         )
         for index, entry in enumerate(self._history_entries):
             access.add_option(
                 Option(
-                    f"최근 업무 리소스 · {entry.label}",
+                    f"최근 URL · {entry.label}",
                     id=f"{_HISTORY_OPTION_PREFIX}{index}",
                 )
             )
-        access.add_option(Option(work_disguise.DIRECT_ACCESS_LABEL, id="direct"))
+        access.add_option(Option("URL 직접 입력", id="direct"))
         access.display = True
         access.highlighted = 0
         self.query_one("#target-url", Input).display = False
