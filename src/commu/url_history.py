@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from commu.paths import url_history_path
 from commu.targets import CommunityTarget, Site, route_url
 
 
@@ -17,8 +18,7 @@ class UrlHistoryEntry:
 
 
 def default_url_history_path(home: Path | None = None) -> Path:
-    base = Path.home() if home is None else home
-    return base / ".cache" / "commu" / "url-history.json"
+    return url_history_path(home)
 
 
 class UrlHistory:

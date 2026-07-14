@@ -9,22 +9,22 @@ from pathlib import Path
 import sys
 from typing import Protocol
 
-import httpx
 from textual import events, work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
 from commu.adapters import CommunityAdapter, adapter_for
+from commu.browser import BrowserRuntime
 from commu.cache import JsonCache
 from commu.client import (
     DEFAULT_REQUEST_STATE_REGISTRY,
-    CommunityHttpClient,
-    make_httpx_client,
+    PlaywrightCommunityClient,
 )
 from commu.errors import ReaderError
 from commu.launcher import LauncherScreen
 from commu.models import Comment, PageResult, PostSummary
+from commu.paths import cache_path
 from commu.service import CommunityService, LoadResult, PostPage
 from commu.targets import CommunityTarget, RECOMMENDED_URLS, Site, route_url
 from commu.url_history import UrlHistory, default_url_history_path
@@ -45,7 +45,7 @@ class ReaderService(Protocol):
 
 @dataclass(slots=True)
 class ReaderResources:
-    raw_client: httpx.AsyncClient
+    client: PlaywrightCommunityClient
     cache: JsonCache
     adapter: CommunityAdapter
     service: CommunityService
@@ -54,45 +54,42 @@ class ReaderResources:
 @dataclass(slots=True)
 class PendingResourceCleanup:
     resources: ReaderResources
-    raw_client_closed: bool = False
     cache_closed: bool = False
 
 
 class ResourceFactory(Protocol):
     def __call__(
-        self, target: CommunityTarget
+        self,
+        target: CommunityTarget,
+        runtime: BrowserRuntime,
     ) -> ReaderResources | Awaitable[ReaderResources]: ...
 
 
 def default_cache_path(home: Path | None = None) -> Path:
-    base = Path.home() if home is None else home
-    return base / ".cache" / "commu" / "cache.db"
+    return cache_path(home)
 
 
-async def create_reader_resources(target: CommunityTarget) -> ReaderResources:
+async def create_reader_resources(
+    target: CommunityTarget,
+    runtime: BrowserRuntime,
+) -> ReaderResources:
     adapter = adapter_for(target)
     cache: JsonCache | None = None
-    raw_client: httpx.AsyncClient | None = None
     try:
         cache = JsonCache(default_cache_path())
-        raw_client = make_httpx_client(adapter.policy)
+        client = PlaywrightCommunityClient(
+            runtime,
+            adapter.policy,
+            state=DEFAULT_REQUEST_STATE_REGISTRY.state_for(target.site),
+        )
         service = CommunityService(
             adapter,
-            CommunityHttpClient(
-                raw_client,
-                adapter.policy,
-                state=DEFAULT_REQUEST_STATE_REGISTRY.state_for(target.site),
-            ),
+            client,
             cache,
         )
-        return ReaderResources(raw_client, cache, adapter, service)
+        return ReaderResources(client, cache, adapter, service)
     except BaseException as original_error:
         cleanup_errors: list[BaseException] = []
-        if raw_client is not None:
-            try:
-                await raw_client.aclose()
-            except BaseException as cleanup_error:
-                cleanup_errors.append(cleanup_error)
         if cache is not None:
             try:
                 cache.close()
@@ -139,6 +136,7 @@ class CommunityReaderApp(App[None]):
         self,
         target: CommunityTarget | None = None,
         service: ReaderService | None = None,
+        browser_runtime: BrowserRuntime | None = None,
         resource_factory: ResourceFactory | None = None,
         url_history: UrlHistory | None = None,
     ) -> None:
@@ -148,12 +146,14 @@ class CommunityReaderApp(App[None]):
         self.target: CommunityTarget | None = None
         self._initial_target = target
         self._injected_service = service
-        self.raw_client = None
+        self.browser_runtime = (
+            browser_runtime if browser_runtime is not None else BrowserRuntime()
+        )
+        self.client = None
         self.cache = None
         self.adapter: CommunityAdapter | None = None
         self._resource_factory = resource_factory or create_reader_resources
         self._owns_resources = False
-        self._raw_client_closed = False
         self._cache_closed = False
         self.service: ReaderService | None = None
         self.url_history = url_history or UrlHistory(default_url_history_path())
@@ -192,9 +192,10 @@ class CommunityReaderApp(App[None]):
                 yield Static("", id="article-content", markup=False)
         yield Footer()
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         self._sync_layout(self.size.width)
         self.query_one("#post-list", ListView).focus()
+        await self.browser_runtime.start()
         if self._initial_target is None:
             self._open_launcher()
             return
@@ -203,12 +204,25 @@ class CommunityReaderApp(App[None]):
     async def on_unmount(self) -> None:
         self._activation_generation += 1
         self._activation_in_progress = False
+        runtime_error: BaseException | None = None
+        try:
+            await self.browser_runtime.aclose()
+        except BaseException as error:
+            runtime_error = error
         active_error: BaseException | None = None
         try:
             await self._release_owned_resources()
         except BaseException as error:
             active_error = error
         cleanup_errors = await self._retry_pending_resource_cleanups()
+        if runtime_error is not None:
+            if active_error is not None:
+                runtime_error.add_note(f"Additional cleanup error: {active_error}")
+            for cleanup_error in cleanup_errors:
+                runtime_error.add_note(
+                    f"Additional retained cleanup error: {cleanup_error}"
+                )
+            raise runtime_error
         if active_error is not None:
             for cleanup_error in cleanup_errors:
                 active_error.add_note(
@@ -249,7 +263,10 @@ class CommunityReaderApp(App[None]):
         resources: ReaderResources | None = None
         try:
             if injected_service is None:
-                pending_resources = self._resource_factory(target)
+                pending_resources = self._resource_factory(
+                    target,
+                    self.browser_runtime,
+                )
                 resources = (
                     await pending_resources
                     if inspect.isawaitable(pending_resources)
@@ -288,10 +305,9 @@ class CommunityReaderApp(App[None]):
         self.adapter = adapter
         self.service = service
         if resources is not None:
-            self.raw_client = resources.raw_client
+            self.client = resources.client
             self.cache = resources.cache
             self._owns_resources = True
-            self._raw_client_closed = False
             self._cache_closed = False
         self._initial_target = None
         self._injected_service = None
@@ -337,13 +353,6 @@ class CommunityReaderApp(App[None]):
         pending: PendingResourceCleanup,
     ) -> list[BaseException]:
         cleanup_errors: list[BaseException] = []
-        if not pending.raw_client_closed:
-            try:
-                await pending.resources.raw_client.aclose()
-            except BaseException as error:
-                cleanup_errors.append(error)
-            else:
-                pending.raw_client_closed = True
         if not pending.cache_closed:
             try:
                 pending.resources.cache.close()
@@ -387,7 +396,7 @@ class CommunityReaderApp(App[None]):
         self.target = None
         self.adapter = None
         self.service = None
-        self.raw_client = None
+        self.client = None
         self.cache = None
         self._owns_resources = False
 
@@ -400,14 +409,6 @@ class CommunityReaderApp(App[None]):
         if not self._owns_resources:
             return
         errors: list[BaseException] = []
-        if not self._raw_client_closed:
-            try:
-                if self.raw_client is not None:
-                    await self.raw_client.aclose()
-            except BaseException as error:
-                errors.append(error)
-            else:
-                self._raw_client_closed = True
         if not self._cache_closed:
             try:
                 if self.cache is not None:
@@ -421,7 +422,7 @@ class CommunityReaderApp(App[None]):
             for secondary_error in errors[1:]:
                 first_error.add_note(f"Additional cleanup error: {secondary_error}")
             raise first_error
-        self.raw_client = None
+        self.client = None
         self.cache = None
         self._owns_resources = False
 

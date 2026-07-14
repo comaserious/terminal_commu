@@ -5,20 +5,15 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
-from commu.adapters.base import RequestPolicy
+from commu.adapters.base import PagePolicy, RequestPolicy
 from commu.errors import ParseError
 from commu.models import Comment, PageResult, PostDetail, PostSummary
 from commu.parser import parse_board, parse_post
 from commu.targets import CommunityTarget, Site
 
 
-_BASE_URL = "https://m.fmkorea.com"
+_BASE_URL = "https://www.fmkorea.com"
 _BOARD_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
-_MOBILE_USER_AGENT = (
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
-    "AppleWebKit/605.1.15 (KHTML, like Gecko) "
-    "Version/16.0 Mobile/15E148 Safari/604.1"
-)
 
 
 def _board_from_url(href: str) -> str | None:
@@ -78,9 +73,19 @@ class FmkAdapter:
     site_name: ClassVar[str] = "FMKorea"
     policy: ClassVar[RequestPolicy] = RequestPolicy(
         site=Site.FMKOREA,
-        user_agent=_MOBILE_USER_AGENT,
-        allowed_origins=frozenset({("https", "m.fmkorea.com", 443), ("https", "www.fmkorea.com", 443)}),
+        user_agent=None,
+        allowed_origins=frozenset(
+            {
+                ("https", "m.fmkorea.com", 443),
+                ("https", "www.fmkorea.com", 443),
+            }
+        ),
         rate_limit_statuses=frozenset({429, 430}),
+        page_policy=PagePolicy(
+            board_selector="table.bd_lst, .bd_m_lst",
+            post_selector=".rd_body",
+        ),
+        fallback_origin=("https", "m.fmkorea.com", 443),
     )
 
     def board_url(self, page: int) -> str:
@@ -93,7 +98,7 @@ class FmkAdapter:
 
     def post_url(self, post: PostSummary, cpage: int) -> str:
         if cpage == 1:
-            return post.url
+            return f"{_BASE_URL}/{post.post_id}"
         return (
             f"{_BASE_URL}/index.php"
             f"?mid={self.target.board_id}"

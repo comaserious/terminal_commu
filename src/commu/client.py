@@ -1,26 +1,34 @@
+from __future__ import annotations
+
 import asyncio
 import math
+import random
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
+from typing import Protocol
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
-import httpx
 from bs4 import BeautifulSoup
 
-from commu.adapters.base import RequestPolicy
+from commu.adapters.base import PagePolicy, RequestPolicy
 from commu.adapters.fmk import FmkAdapter
 from commu.errors import AccessBlocked, FetchError, RateLimited
 from commu.targets import Site
 
+
 FMK_POLICY = FmkAdapter.policy
 
-# Try to import curl_cffi for Cloudflare bypass
-try:
-    from curl_cffi import requests as curl_requests
-    CURL_CFFI_AVAILABLE = True
-except ImportError:
-    CURL_CFFI_AVAILABLE = False
+
+class _Session(Protocol):
+    page: object
+
+
+class _BrowserRuntime(Protocol):
+    async def session_for(self, site: Site, policy: RequestPolicy) -> _Session: ...
+
+    async def reset(self, site: Site, policy: RequestPolicy) -> _Session: ...
 
 
 @dataclass(slots=True)
@@ -49,74 +57,204 @@ class RequestStateRegistry:
 DEFAULT_REQUEST_STATE_REGISTRY = RequestStateRegistry()
 
 
-class CommunityHttpClient:
-    """Stateless community requests over a caller-owned async client.
+class _BrokenSession(Exception):
+    pass
 
-    This wrapper exclusively controls the injected client's request session state,
-    while the caller remains responsible for closing the client.
-    """
 
-    _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
-    _MAX_REDIRECTS = 5
+class _ChallengePage(Exception):
+    def __init__(self, message: str = "", *, effective_url: str) -> None:
+        super().__init__(message)
+        self.effective_url = effective_url
+
+
+class PlaywrightCommunityClient:
+    """Fetch rendered HTML through a caller-owned persistent browser runtime."""
+
+    _NAVIGATION_OPTIONS = {"wait_until": "domcontentloaded", "timeout": 10_000}
 
     def __init__(
         self,
-        raw: httpx.AsyncClient,
+        runtime: _BrowserRuntime,
         policy: RequestPolicy,
+        state: CommunityRequestState | None = None,
         min_interval: float | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         wall_clock: Callable[[], float] = time.time,
-        *,
-        state: CommunityRequestState | None = None,
+        jitter: Callable[[], float] = random.random,
     ) -> None:
         if min_interval is None:
             min_interval = policy.min_interval
         if min_interval < 0 or not math.isfinite(min_interval):
             raise ValueError("min_interval must be finite and non-negative")
 
-        self._client = raw
+        self._runtime = runtime
         self._policy = policy
         self._site_name = policy.site.display_name
-        self._site_headers = _headers_for_policy(policy)
+        self._state = state or CommunityRequestState()
         self._min_interval = min_interval
         self._clock = clock
         self._sleep = sleep
         self._wall_clock = wall_clock
-        self._state = state or CommunityRequestState()
+        self._jitter = jitter
 
     async def get_text(self, url: str) -> str:
+        self._validate_initial_origin(url)
         async with self._state.lock:
             self._raise_if_cooling_down()
+            return await self._get_text_bounded(url)
+
+    async def _get_text_bounded(self, url: str) -> str:
+        challenge_reload_available = True
+        session_reset_available = True
+        fallback_available = self._policy.fallback_origin is not None
+        current_url = url
+        session = await self._session_for()
+
+        while True:
+            page = session.page
             try:
-                response = await self._request(url)
-            except httpx.TimeoutException as exc:
-                raise FetchError(f"{self._site_name} request timed out") from exc
-            except httpx.HTTPStatusError as exc:
-                raise FetchError(
-                    f"{self._site_name} returned HTTP {exc.response.status_code}"
-                ) from exc
-            except httpx.HTTPError as exc:
-                raise FetchError(f"{self._site_name} request failed") from exc
+                if self._page_is_closed(page):
+                    raise _BrokenSession
+                html = await self._navigate(page, current_url)
+            except _ChallengePage as challenge:
+                challenge_message = str(challenge)
+                challenge_effective_url = challenge.effective_url
+                if challenge_reload_available:
+                    challenge_reload_available = False
+                    try:
+                        html = await self._reload(page, current_url)
+                    except _ChallengePage as reload_challenge:
+                        challenge_message = str(reload_challenge)
+                        challenge_effective_url = reload_challenge.effective_url
+                    except (AccessBlocked, RateLimited, FetchError):
+                        raise
+                    except Exception as error:
+                        if not session_reset_available:
+                            raise FetchError(
+                                f"{self._site_name} browser session failed"
+                            ) from error
+                        session_reset_available = False
+                        session = await self._reset_session()
+                        continue
+                    else:
+                        return html
 
-            if response.status_code in self._policy.rate_limit_statuses:
-                retry_after = response.headers.get("Retry-After")
-                self._set_retry_deadline(retry_after)
-                raise RateLimited(self._site_name, retry_after)
+                fallback_url = (
+                    self._fallback_url(current_url, challenge_effective_url)
+                    if fallback_available
+                    else None
+                )
+                if fallback_url is None:
+                    raise AccessBlocked(
+                        challenge_message
+                        or f"{self._site_name} returned a challenge page"
+                    ) from None
+                fallback_available = False
+                current_url = fallback_url
+                continue
+            except (AccessBlocked, RateLimited, FetchError):
+                raise
+            except Exception as error:
+                if not session_reset_available:
+                    raise FetchError(
+                        f"{self._site_name} browser session failed"
+                    ) from error
+                session_reset_available = False
+                session = await self._reset_session()
+                continue
+            return html
 
-        if response.status_code in self._policy.blocked_statuses:
-            raise AccessBlocked(f"{self._site_name} denied access")
-        if not response.is_success:
-            raise FetchError(f"{self._site_name} returned HTTP {response.status_code}")
+    async def _navigate(self, page: object, url: str) -> str:
+        await self._begin_navigation()
+        try:
+            response = await page.goto(url, **self._NAVIGATION_OPTIONS)
+        except Exception as error:
+            raise _BrokenSession from error
+        return await self._read_response(page, response, url)
 
-        text = response.text
-        if self._is_challenge_page(text):
-            raise AccessBlocked(f"{self._site_name} returned a challenge page")
-        return text
+    async def _reload(self, page: object, url: str) -> str:
+        await self._begin_navigation()
+        response = await page.reload(**self._NAVIGATION_OPTIONS)
+        return await self._read_response(page, response, url)
 
-    @staticmethod
-    def _is_challenge_page(text: str) -> bool:
-        soup = BeautifulSoup(text, "html.parser")
+    async def _read_response(self, page: object, response: object, url: str) -> str:
+        if response is None:
+            raise FetchError(f"{self._site_name} navigation returned no response")
+        self._validate_response(response)
+        # Challenge documents often never attach the requested content root.
+        # Detect their stable browser-visible markers before waiting for it.
+        if await self._is_challenge(page):
+            raise _ChallengePage(
+                effective_url=self._validate_current_page(page)
+            )
+        selector = self._selector_for(url)
+        try:
+            await page.wait_for_selector(
+                selector,
+                state="attached",
+                timeout=10_000,
+            )
+        except Exception:
+            self._validate_current_page(page)
+            try:
+                html = await page.content()
+            except Exception:
+                html = None
+            if await self._is_challenge(page, html):
+                raise _ChallengePage(
+                    effective_url=self._validate_current_page(page)
+                ) from None
+            self._validate_current_page(page)
+            raise
+        self._validate_current_page(page)
+        html = await page.content()
+        if await self._is_challenge(page, html):
+            raise _ChallengePage(
+                effective_url=self._validate_current_page(page)
+            )
+        self._validate_current_page(page)
+        return html
+
+    def _validate_response(self, response: object) -> None:
+        response_url = str(getattr(response, "url", ""))
+        if self._origin(response_url) not in self._policy.allowed_origins:
+            raise FetchError(f"{self._site_name} rejected cross-origin response")
+
+        status = int(getattr(response, "status", 0))
+        headers = getattr(response, "headers", {})
+        if status in self._policy.rate_limit_statuses:
+            retry_after = headers.get("Retry-After") or headers.get("retry-after")
+            self._set_retry_deadline(retry_after)
+            raise RateLimited(self._site_name, retry_after)
+        if status in self._policy.blocked_statuses:
+            raise _ChallengePage(
+                f"{self._site_name} denied access",
+                effective_url=response_url,
+            )
+        if not 200 <= status < 300:
+            raise FetchError(f"{self._site_name} returned HTTP {status}")
+
+    async def _is_challenge(self, page: object, html: str | None = None) -> bool:
+        if html is not None and self._html_is_challenge(html):
+            return True
+        try:
+            raw_title = await page.title()
+        except Exception:
+            raw_title = ""
+        title = " ".join(raw_title.casefold().split()).rstrip(" .…")
+        if title in {"access denied", "captcha", "complete captcha", "just a moment"}:
+            return True
+        for selector in self._policy.page_policy.challenge_selectors:
+            try:
+                if await page.query_selector(selector) is not None:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _html_is_challenge(self, html: str) -> bool:
+        soup = BeautifulSoup(html, "html.parser")
         if soup.title is not None:
             title = " ".join(
                 soup.title.get_text(" ", strip=True).casefold().split()
@@ -128,43 +266,71 @@ class CommunityHttpClient:
                 "just a moment",
             }:
                 return True
+        return any(
+            soup.select_one(selector) is not None
+            for selector in self._policy.page_policy.challenge_selectors
+        )
 
-        for element in soup.find_all(True):
-            attributes = [element.get("id"), element.get("class")]
-            if element.name in {"form", "input"}:
-                attributes.extend(
-                    [
-                        element.get("name"),
-                        element.get("action"),
-                        element.get("type"),
-                    ]
-                )
-            markers = " ".join(
-                str(value)
-                for value in attributes
-                if value is not None
-            ).casefold()
-            if "captcha" in markers:
-                return True
-        return False
+    def _selector_for(self, url: str) -> str:
+        parsed = urlsplit(url)
+        query = parse_qs(parsed.query)
+        segments = parsed.path.strip("/").split("/")
+        if self._policy.site is Site.ARCA:
+            is_post = (
+                len(segments) == 3
+                and segments[0] == "b"
+                and segments[2].isdecimal()
+            )
+        elif self._policy.site is Site.DCINSIDE:
+            is_post = (
+                len(segments) == 3
+                and segments[0] == "board"
+                and segments[2].isdecimal()
+            )
+        else:
+            document_ids = query.get("document_srl", [])
+            is_post = (
+                len(segments) == 1 and segments[0].isdecimal()
+            ) or (
+                len(document_ids) == 1 and document_ids[0].isdecimal()
+            )
+        page_policy: PagePolicy = self._policy.page_policy
+        return page_policy.post_selector if is_post else page_policy.board_selector
+
+    async def _begin_navigation(self) -> None:
+        await self._wait_for_turn()
+        self._state.last_started = self._clock()
+
+    async def _session_for(self) -> _Session:
+        try:
+            return await self._runtime.session_for(self._policy.site, self._policy)
+        except Exception as error:
+            raise FetchError(f"{self._site_name} browser session failed") from error
+
+    async def _reset_session(self) -> _Session:
+        try:
+            return await self._runtime.reset(self._policy.site, self._policy)
+        except Exception as error:
+            raise FetchError(f"{self._site_name} browser session reset failed") from error
+
+    @staticmethod
+    def _page_is_closed(page: object) -> bool:
+        is_closed = getattr(page, "is_closed", None)
+        return bool(callable(is_closed) and is_closed())
 
     async def _wait_for_turn(self) -> None:
-        now = self._clock()
-        not_before = now
-        if self._state.last_started is not None:
-            not_before = max(
-                not_before,
-                self._state.last_started + self._min_interval,
-            )
-
-        delay = not_before - now
+        if self._state.last_started is None:
+            return
+        jitter = 0.0 if self._min_interval == 0 else self._jitter()
+        if jitter < 0 or not math.isfinite(jitter):
+            raise FetchError(f"{self._site_name} request jitter is invalid")
+        not_before = self._state.last_started + self._min_interval + jitter
+        delay = not_before - self._clock()
         if delay <= 0:
             return
         await self._sleep(delay)
         if self._clock() < not_before:
-            raise FetchError(
-                f"{self._site_name} request spacing could not be enforced"
-            )
+            raise FetchError(f"{self._site_name} request spacing could not be enforced")
 
     def _raise_if_cooling_down(self) -> None:
         if self._state.retry_not_before is None:
@@ -173,100 +339,66 @@ class CommunityHttpClient:
         if remaining > 0:
             raise RateLimited(self._site_name, str(remaining))
 
-    async def _request(self, url: str) -> httpx.Response:
-        current_url = url
-        for redirect_count in range(self._MAX_REDIRECTS + 1):
-            if self._origin(httpx.URL(current_url)) not in self._policy.allowed_origins:
-                raise FetchError(f"{self._site_name} rejected request origin")
-            await self._wait_for_turn()
-            self._state.last_started = self._clock()
-            response = await self._send_without_state(current_url)
-            if response.status_code not in self._REDIRECT_STATUSES:
-                return response
-
-            location = response.headers.get("Location")
-            if not location:
-                raise FetchError(
-                    f"{self._site_name} returned HTTP {response.status_code} "
-                    "without a redirect location"
-                )
-            if redirect_count == self._MAX_REDIRECTS:
-                raise FetchError(
-                    f"{self._site_name} redirect limit exceeded at HTTP "
-                    f"{response.status_code}"
-                )
-            redirect_url = response.url.join(location)
-            if self._origin(redirect_url) not in self._policy.allowed_origins:
-                raise FetchError(
-                    f"{self._site_name} rejected cross-origin redirect"
-                )
-            current_url = str(redirect_url)
-
-        raise FetchError(f"{self._site_name} redirect limit exceeded")
-
-    async def _send_without_state(self, url: str) -> httpx.Response:
-        self._clear_cookies()
-        try:
-            build_request = getattr(self._client, "build_request", None)
-            send = getattr(self._client, "send", None)
-            if callable(build_request) and callable(send):
-                request = build_request("GET", url, headers=self._site_headers)
-                request.headers.pop("cookie", None)
-                return await send(request, follow_redirects=False)
-            return await self._client.get(url, headers=self._site_headers)
-        finally:
-            self._clear_cookies()
-
-    def _clear_cookies(self) -> None:
-        cookies = getattr(self._client, "cookies", None)
-        clear = getattr(cookies, "clear", None)
-        if callable(clear):
-            clear()
-
-    @staticmethod
-    def _origin(url: httpx.URL) -> tuple[str, str, int]:
-        scheme = url.scheme.casefold()
-        port = url.port
-        if port is None:
-            port = {"http": 80, "https": 443}.get(scheme)
-        return scheme, url.host.casefold(), port or -1
-
     def _set_retry_deadline(self, retry_after: str | None) -> None:
         if retry_after is None:
             return
-
         try:
-            delta_seconds = int(retry_after)
-        except ValueError:
+            delay = float(int(retry_after))
+        except (ValueError, OverflowError):
             try:
-                retry_at = parsedate_to_datetime(retry_after)
-                delay = retry_at.timestamp() - self._wall_clock()
+                delay = parsedate_to_datetime(retry_after).timestamp() - self._wall_clock()
             except (TypeError, ValueError, OverflowError):
                 return
-        else:
-            try:
-                delay = float(delta_seconds)
-            except OverflowError:
-                return
+        if delay <= 0:
+            return
+        deadline = self._clock() + delay
+        current = self._state.retry_not_before
+        self._state.retry_not_before = deadline if current is None else max(current, deadline)
 
-        if delay > 0:
-            deadline = self._clock() + delay
-            current = self._state.retry_not_before
-            self._state.retry_not_before = (
-                deadline if current is None else max(current, deadline)
-            )
+    def _validate_initial_origin(self, url: str) -> None:
+        if self._origin(url) not in self._policy.allowed_origins:
+            raise FetchError(f"{self._site_name} rejected request origin")
 
+    def _fallback_url(self, url: str, effective_url: str) -> str | None:
+        fallback = self._policy.fallback_origin
+        if fallback is None:
+            return None
 
-def _headers_for_policy(policy: RequestPolicy) -> dict[str, str]:
-    return {
-        "User-Agent": policy.user_agent,
-        "Accept-Language": "ko-KR,ko;q=0.9",
-    }
+        requested_origin = self._origin(url)
+        effective_origin = self._origin(effective_url)
+        if effective_origin not in self._policy.allowed_origins:
+            raise FetchError(f"{self._site_name} rejected challenge origin")
+        if requested_origin == fallback or effective_origin != requested_origin:
+            return None
 
+        scheme, host, port = fallback
+        if fallback not in self._policy.allowed_origins:
+            raise FetchError(f"{self._site_name} rejected fallback origin")
 
-def make_httpx_client(policy: RequestPolicy = FMK_POLICY) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        follow_redirects=True,
-        timeout=httpx.Timeout(10.0, connect=5.0),
-        headers=_headers_for_policy(policy),
-    )
+        parsed = urlsplit(url)
+        default_port = {"http": 80, "https": 443}.get(scheme)
+        netloc = host if port == default_port else f"{host}:{port}"
+        candidate = urlunsplit(
+            (scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+        )
+        if self._origin(candidate) not in self._policy.allowed_origins:
+            raise FetchError(f"{self._site_name} rejected fallback origin")
+        return candidate
+
+    def _validate_current_page(self, page: object) -> str:
+        current_url = str(getattr(page, "url", ""))
+        if self._origin(current_url) not in self._policy.allowed_origins:
+            raise FetchError(f"{self._site_name} rejected cross-origin current page")
+        return current_url
+
+    @staticmethod
+    def _origin(url: str) -> tuple[str, str, int]:
+        try:
+            parsed = urlsplit(url)
+            port = parsed.port
+        except ValueError:
+            return "", "", -1
+        scheme = parsed.scheme.casefold()
+        if port is None:
+            port = {"http": 80, "https": 443}.get(scheme, -1)
+        return scheme, (parsed.hostname or "").casefold(), port

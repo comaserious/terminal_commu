@@ -1,0 +1,16 @@
+services:
+  commu:
+    build: .
+    image: commu:local
+    init: true
+    stdin_open: true
+    tty: true
+    shm_size: 1gb
+    security_opt:
+      - seccomp=docker/seccomp_profile.json
+    volumes:
+      - commu-data:/data
+
+volumes:
+  commu-data:
+    name: commu-data

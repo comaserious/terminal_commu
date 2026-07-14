@@ -10,6 +10,7 @@ from commu.models import Comment, PageResult, PostDetail, PostSummary
 
 
 BASE_URL = "https://m.fmkorea.com"
+CANONICAL_BASE_URL = "https://www.fmkorea.com"
 _DOCUMENT_PATH = re.compile(r"/(?:best/)?(\d+)")
 
 
@@ -49,7 +50,10 @@ def _numeric_attribute(element: Tag, attribute: str, name: str) -> str:
 
 def _post_identity(href: str) -> tuple[str, str] | None:
     parsed = urlparse(urljoin(BASE_URL, href.strip()))
-    if parsed.scheme not in {"http", "https"} or parsed.netloc not in ("m.fmkorea.com", "www.fmkorea.com"):
+    if parsed.scheme not in {"http", "https"} or parsed.netloc not in (
+        "m.fmkorea.com",
+        "www.fmkorea.com",
+    ):
         return None
 
     path_match = _DOCUMENT_PATH.fullmatch(parsed.path)
@@ -59,7 +63,10 @@ def _post_identity(href: str) -> tuple[str, str] | None:
         query = parse_qs(parsed.query)
         mids = query.get("mid", [])
         document_ids = query.get("document_srl", [])
-        if len(mids) != 1 or len(document_ids) != 1:
+        if (
+            mids != ["football_world"]
+            or len(document_ids) != 1
+        ):
             return None
         post_id = document_ids[0]
         if not post_id.isdigit():
@@ -67,7 +74,7 @@ def _post_identity(href: str) -> tuple[str, str] | None:
     else:
         return None
 
-    return post_id, f"{BASE_URL}/{post_id}"
+    return post_id, f"{CANONICAL_BASE_URL}/{post_id}"
 
 
 def _board_column_index(soup: BeautifulSoup, label: str) -> int | None:
@@ -82,13 +89,13 @@ def _board_column_index(soup: BeautifulSoup, label: str) -> int | None:
 def parse_board(html: str, page: int) -> PageResult[PostSummary]:
     soup = BeautifulSoup(html, "html.parser")
     posts: list[PostSummary] = []
-    
-    # Mobile FMKorea uses .bd_m_lst with li elements
+
+    # Playwright can receive either FMKorea layout while a persisted session is
+    # transitioning between the desktop and mobile origins. Preserve both DOMs.
     for row in soup.select(".bd_m_lst > li"):
         if "notice" in row.get("class", []):
-            # Skip notice posts for now, or handle separately
             continue
-            
+
         title_anchor = row.select_one("h3 a[href]")
         if not isinstance(title_anchor, Tag):
             continue
@@ -101,14 +108,12 @@ def parse_board(html: str, page: int) -> PageResult[PostSummary]:
             continue
 
         post_id, canonical_url = identity
-        
-        # Mobile structure: .info contains metadata
         info = row.select_one(".info")
         views = "0"
         votes = 0
         created_at = ""
         author = ""
-        
+
         if isinstance(info, Tag):
             for span in info.select("span"):
                 text = _normalize_text(span)
@@ -121,7 +126,6 @@ def parse_board(html: str, page: int) -> PageResult[PostSummary]:
                 elif "clock" in str(span.get("class", "")):
                     created_at = _normalize_text(span.select_one("b"))
         
-        # Comment count in .comment_count
         comment_count = _first_integer(row.select_one(".comment_count"))
 
         posts.append(
@@ -139,12 +143,50 @@ def parse_board(html: str, page: int) -> PageResult[PostSummary]:
             )
         )
 
+    views_index = _board_column_index(soup, "조회")
+    for row in soup.select("table.bd_lst tbody > tr"):
+        title_cell = row.select_one("td.title")
+        title_anchor = (
+            title_cell.select_one("a[href]") if isinstance(title_cell, Tag) else None
+        )
+        if not isinstance(title_anchor, Tag):
+            continue
+        title = _normalize_text(title_anchor)
+        identity = _post_identity(str(title_anchor.get("href", "")))
+        if not title or identity is None:
+            continue
+
+        cells = row.find_all(["th", "td"], recursive=False)
+        views = "0"
+        if views_index is not None and views_index < len(cells):
+            views = _normalize_text(cells[views_index]) or "0"
+        post_id, canonical_url = identity
+        category = _normalize_text(row.select_one(".cate"))
+        posts.append(
+            PostSummary(
+                post_id=post_id,
+                title=title,
+                category=category,
+                author=_normalize_text(row.select_one(".author")),
+                created_at=_normalize_text(row.select_one(".time")),
+                views=views,
+                votes=_first_integer(row.select_one(".m_no_voted")),
+                comment_count=_first_integer(
+                    title_cell.select_one(".replyNum")
+                    if isinstance(title_cell, Tag)
+                    else None
+                ),
+                url=canonical_url,
+                is_notice="notice" in row.get("class", []) or category == "공지",
+            )
+        )
+
     if not posts:
         raise ParseError("missing board rows")
 
     has_next = any(
         "다음" in _normalize_text(anchor)
-        for anchor in soup.select(".pagination a[href]")
+        for anchor in soup.select(".pagination a[href], .bd_pg a[href]")
     )
     return PageResult(
         items=tuple(posts),
@@ -189,7 +231,7 @@ def _comment_page(href: str) -> int | None:
     return int(values[0])
 
 
-def _post_stats(root: Tag) -> tuple[str, int, int]:
+def _post_stats(root: Tag | BeautifulSoup) -> tuple[str, int, int]:
     views = "0"
     votes = 0
     comment_count = 0
@@ -213,51 +255,46 @@ def parse_post(
     cpage: int,
 ) -> tuple[PostDetail, PageResult[Comment]]:
     soup = BeautifulSoup(html, "html.parser")
-    
-    # Mobile FMKorea structure
-    rd_hd = _require(soup, ".rd_hd", "post header")
-    title = _normalize_text(rd_hd.select_one(".np_18px_span"))
+    wrapper = soup.select_one(".rd")
+    if isinstance(wrapper, Tag):
+        root: Tag | BeautifulSoup = wrapper
+        post_id = _numeric_attribute(wrapper, "data-docsrl", "post id")
+    else:
+        mobile_header = soup.select_one(".rd_hd")
+        mobile_body = soup.select_one(".rd_body")
+        if not isinstance(mobile_header, Tag) and not isinstance(mobile_body, Tag):
+            raise ParseError("missing post root")
+        identity = _post_identity(url)
+        if identity is None:
+            raise ParseError("invalid post id")
+        post_id = identity[0]
+        root = soup
+
+    rd_hd = root.select_one(".rd_hd")
+    title = _normalize_text(
+        rd_hd.select_one(".np_18px_span") if isinstance(rd_hd, Tag) else None
+    )
     if not title:
         raise ParseError("missing post title")
-    
-    # Extract post_id from URL or meta tag
-    post_id_match = re.search(r"/(\d+)", url)
-    if not post_id_match:
-        raise ParseError("missing post id in url")
-    post_id = post_id_match.group(1)
-    
-    # Extract body content
-    rd_body = _require(soup, ".rd_body", "post body container")
+
+    rd_body = _require(root, ".rd_body", "post body container")
     body_node = rd_body.select_one(".xe_content")
     if not isinstance(body_node, Tag):
         raise ParseError("missing post body content")
     rendered_body, links = _render_content(body_node)
     if not rendered_body:
         raise ParseError("missing post body")
-    
-    # Extract metadata from header
-    views = "0"
-    votes = 0
-    comment_count = 0
-    author = ""
-    created_at = ""
-    
-    for span in rd_hd.select("span"):
-        text = _normalize_text(span)
-        if "조회 수" in text:
-            views = _normalize_text(span.select_one("b")) or "0"
-        elif "추천 수" in text:
-            votes = _first_integer(span.select_one("b"))
-        elif "댓글" in text:
-            comment_count = _first_integer(span.select_one("b"))
-    
+    views, votes, comment_count = _post_stats(root)
     author = _normalize_text(rd_hd.select_one(".member_plate"))
     created_at = _normalize_text(rd_hd.select_one(".date"))
+    category = _normalize_text(
+        soup.select_one(".tl_srch a.category, .rd_hd .category")
+    )
 
     summary = PostSummary(
         post_id=post_id,
         title=title,
-        category="",
+        category=category,
         author=author,
         created_at=created_at,
         views=views,
@@ -268,7 +305,6 @@ def parse_post(
     )
     detail = PostDetail(summary=summary, body=rendered_body, links=links)
 
-    # Parse comments
     comments: list[Comment] = []
     for item in soup.select(".fdb_lst_ul > li.fdb_itm"):
         id_match = re.fullmatch(r"comment_(\d+)", str(item.get("id", "")))

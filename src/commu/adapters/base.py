@@ -6,13 +6,26 @@ from commu.targets import CommunityTarget, Site
 
 
 @dataclass(frozen=True, slots=True)
+class PagePolicy:
+    board_selector: str
+    post_selector: str
+    challenge_selectors: tuple[str, ...] = (
+        "#challenge-form",
+        "iframe[src*='turnstile']",
+        "[class*='captcha']",
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class RequestPolicy:
     site: Site
-    user_agent: str
+    user_agent: str | None
     allowed_origins: frozenset[tuple[str, str, int]]
     rate_limit_statuses: frozenset[int]
     blocked_statuses: frozenset[int] = frozenset({403})
     min_interval: float = 2.0
+    page_policy: PagePolicy = PagePolicy("body", "body")
+    fallback_origin: tuple[str, str, int] | None = None
 
 
 class CommunityAdapter(Protocol):

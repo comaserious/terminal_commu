@@ -7,21 +7,13 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 
 from bs4 import BeautifulSoup, Tag
 
-from commu.adapters.base import RequestPolicy
-from commu.errors import AccessBlocked, FetchError, ParseError, RateLimited
+from commu.adapters.base import PagePolicy, RequestPolicy
+from commu.errors import ParseError
 from commu.models import Comment, PageResult, PostDetail, PostSummary
 from commu.targets import CommunityTarget, Site
 
 
 _BASE_URL = "https://arca.live"
-
-# Try to import curl_cffi for Cloudflare bypass
-try:
-    from curl_cffi import requests as curl_requests
-    CURL_CFFI_AVAILABLE = True
-except ImportError:
-    CURL_CFFI_AVAILABLE = False
-
 
 def _normalize_text(value: str | Tag | None) -> str:
     if value is None:
@@ -184,29 +176,15 @@ class ArcaAdapter:
         rate_limit_statuses=frozenset({429}),
         blocked_statuses=frozenset({403}),
         min_interval=2.0,
+        page_policy=PagePolicy(
+            board_selector=".article-list",
+            post_selector=".article-content",
+            challenge_selectors=(
+                "#challenge-form",
+                "iframe[src*='turnstile']",
+            ),
+        ),
     )
-    
-    @staticmethod
-    def use_curl_cffi() -> bool:
-        """Check if curl_cffi should be used for Arca.live requests."""
-        return CURL_CFFI_AVAILABLE
-    
-    @staticmethod
-    def fetch_with_curl_cffi(url: str) -> str:
-        """Fetch URL using curl_cffi for Cloudflare bypass."""
-        if not CURL_CFFI_AVAILABLE:
-            raise ImportError("curl_cffi is not available")
-        
-        response = curl_requests.get(url, impersonate="chrome124")
-        if response.status_code == 403:
-            raise AccessBlocked("아카라이브 denied access (Cloudflare)")
-        if response.status_code == 429:
-            raise RateLimited("아카라이브", response.headers.get("Retry-After"))
-        if not (200 <= response.status_code < 300):
-            raise FetchError(f"아카라이브 returned HTTP {response.status_code}")
-        
-        return response.text
-
     def board_url(self, page: int) -> str:
         if page == 1:
             return self.target.board_url

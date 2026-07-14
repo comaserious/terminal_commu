@@ -69,6 +69,7 @@ def route_url(raw: str) -> CommunityTarget:
 
     routers = {
         "www.fmkorea.com": _route_fmk,
+        "m.fmkorea.com": _route_fmk,
         "gall.dcinside.com": _route_dcinside,
         "m.dcinside.com": _route_dcinside,
         "arca.live": _route_arca,

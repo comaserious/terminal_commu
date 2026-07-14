@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 
 from bs4 import BeautifulSoup, Tag
 
-from commu.adapters.base import RequestPolicy
+from commu.adapters.base import PagePolicy, RequestPolicy
 from commu.errors import ParseError
 from commu.models import Comment, PageResult, PostDetail, PostSummary
 from commu.targets import CommunityTarget, Site
@@ -149,6 +149,10 @@ class DcinsideAdapter:
         rate_limit_statuses=frozenset({429}),
         blocked_statuses=frozenset({403}),
         min_interval=2.0,
+        page_policy=PagePolicy(
+            board_selector="ul.gall-detail-lst",
+            post_selector=".gall-thum-btm .thum-txt .thum-txtin",
+        ),
     )
 
     def board_url(self, page: int) -> str:
