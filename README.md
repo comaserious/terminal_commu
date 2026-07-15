@@ -24,7 +24,7 @@ Commu는 로그인, 글쓰기, 추천, 구독을 지원하지 않습니다. CAPT
 
 ```bash
 git clone <REPOSITORY_URL>
-cd terminal_community_v2
+cd terminal_community
 ```
 
 ### 2. 처음 실행하기
