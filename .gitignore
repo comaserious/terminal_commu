@@ -3,6 +3,6 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
-docs/
+docs/superpowers/
 tests/
 .ruff_cache/

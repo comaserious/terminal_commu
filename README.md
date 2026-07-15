@@ -1,86 +1,260 @@
 # Commu
 
-FMKorea, 디시인사이드, 아카라이브의 공개 게시글을 터미널에서 읽는 애플리케이션입니다. 목록, 본문, 댓글을 키보드로 탐색할 수 있습니다.
+**FMKorea**, **DCInside**, **Arca Live**의 공개 게시글을 터미널에서 읽는 read-only TUI입니다.
 
-Commu는 읽기 전용입니다. 로그인, 글쓰기, 추천, 구독을 지원하지 않으며 CAPTCHA나 JavaScript/WASM 보안 검증을 우회하지 않습니다.
+커뮤니티는 시끄러워도 터미널은 조용하니까요. 브라우저 탭을 하나 더 들키지 않고, 목록부터 본문과 댓글까지 키보드로 둘러볼 수 있습니다.
 
-## 주요 기능
+Commu는 로그인, 글쓰기, 추천, 구독을 지원하지 않습니다. CAPTCHA나 JavaScript/WASM 보안 검증을 해결하거나 우회하지도 않습니다.
 
-- FMKorea 해외축구 게시판 지원
-- 디시인사이드 일반·마이너·미니 갤러리 지원
-- 아카라이브 공개 채널 지원
-- 게시글 목록, 본문, 댓글과 답글 표시
-- 시작 메뉴의 추천 URL 또는 직접 URL 입력
+## Preview
+
+![Commu Explorer showing the community tree, post list, and article reader](docs/images/commu-explorer.png)
+
+## Quick Start
+
+가장 간단하고 권장하는 실행 방법은 Docker Compose입니다. Python이나 Playwright를 호스트에 따로 설치할 필요가 없습니다.
+
+### 1. 준비하기
+
+- [Git](https://git-scm.com/)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) 또는 Docker Compose v2 호환 Docker Engine
+- TUI를 표시할 수 있는 터미널
+
+저장소의 **Code** 버튼에서 HTTPS 주소를 복사한 뒤 다음 명령을 실행하세요. `<REPOSITORY_URL>`은 복사한 주소로 바꿉니다.
+
+```bash
+git clone <REPOSITORY_URL>
+cd terminal_community_v2
+```
+
+### 2. 처음 실행하기
+
+저장소 루트에서 이미지를 빌드하고 Commu를 실행합니다.
+
+```bash
+docker compose run --rm --build commu
+```
+
+첫 빌드는 Playwright와 Chromium이 포함된 기반 이미지를 내려받기 때문에 시간이 조금 걸릴 수 있습니다. 커피 한 모금 정도는 괜찮지만, 새 원두를 볶을 정도는 아닙니다.
+
+### 3. 다음부터 실행하기
+
+```bash
+docker compose run --rm commu
+```
+
+소스가 변경됐거나 `git pull`로 새 버전을 받은 뒤에는 다시 빌드하세요.
+
+```bash
+docker compose run --rm --build commu
+```
+
+앱은 `q`로 종료합니다. `--rm`은 실행 컨테이너만 삭제하고 `commu-data` named volume은 유지합니다. 따라서 cache, URL history, browser storage state는 다음 실행에서도 사용됩니다.
+
+## 처음 둘러보기
+
+인자 없이 실행하면 Explorer의 community tree가 열립니다.
+
+1. `↑` / `↓`로 site와 항목 사이를 이동합니다.
+2. `←` / `→`로 tree를 접거나 펼칩니다.
+3. `Enter`로 site, 추천 board, 최근 URL 또는 post를 엽니다.
+4. `Tab`으로 tree, post list, article pane 사이를 이동합니다.
+5. 길을 잃었다면 화면 곳곳의 keyboard hint를 보세요. 그래도 길을 잃었다면 `Esc`가 대체로 집 방향입니다.
+
+## 지원 기능
+
+- **FMKorea** 해외축구 board
+- **DCInside** 일반·minor·mini gallery
+- **Arca Live** 공개 channel
+- Post list, article, comments와 replies 표시
+- 추천 URL 또는 직접 URL 입력
 - 직접 입력한 URL의 최근 기록
-- `commu <URL>`을 통한 게시판·게시글 바로 열기
-- 사이트와 게시판이 분리된 로컬 캐시
-- 이미지·동영상을 다운로드하지 않는 텍스트 전용 화면
+- `commu <URL>`을 통한 board·post 바로 열기
+- Site와 board가 분리된 local cache
+- 이미지와 동영상을 다운로드하지 않는 text-only 화면
+- Site별 browser storage state 유지
 
-## 요구사항
+Commu는 공개 페이지를 읽기만 합니다. 로그인 전용 글, 성인 인증이 필요한 콘텐츠, CAPTCHA 뒤의 페이지는 지원 범위가 아닙니다.
 
-- Python 3.12 이상
-- Textual 화면을 표시할 수 있는 터미널
-- 선택한 커뮤니티에 접속할 수 있는 네트워크 환경
+## Keyboard
 
-Conda는 필수가 아닙니다. 아래 설치 방법은 Python 기본 기능인 `venv`를 사용합니다.
+화면 안에도 현재 context에 맞는 hint가 계속 표시됩니다.
 
-## 설치
+| Key | Action |
+| --- | --- |
+| `↑` / `↓` | 항목 이동 또는 본문 scroll |
+| `←` / `→` | Tree collapse/expand, board page 이동, comment page 이동 |
+| `Enter` | 선택하거나 post 열기 |
+| `Tab` | Pane focus 이동 |
+| `Esc` | 이전 단계, tree 또는 post list로 돌아가기 |
+| `r` | 현재 화면 refresh |
+| `s` | Site 선택 화면 열기 |
+| `q` | Quit |
 
-GitHub 저장소 상단의 **Code** 버튼에서 HTTPS 주소를 복사해 `git clone`으로 내려받거나, **Download ZIP**을 선택해 압축을 풉니다. 이후 터미널에서 저장소 폴더로 이동합니다.
+## URL로 바로 열기
+
+Native 설치에서는 URL을 인자로 넘겨 시작 메뉴를 건너뛸 수 있습니다.
+
+```bash
+commu https://www.fmkorea.com/football_world
+commu 'https://gall.dcinside.com/board/lists/?id=football_new9'
+commu https://arca.live/b/rogersfu
+```
+
+Docker Compose에서는 service 이름 뒤에 URL을 추가합니다.
+
+```bash
+docker compose run --rm commu https://www.fmkorea.com/football_world
+docker compose run --rm commu 'https://gall.dcinside.com/board/lists/?id=football_new9'
+docker compose run --rm commu https://arca.live/b/rogersfu
+```
+
+Board URL은 post list를, post URL은 해당 article과 comments를 바로 엽니다.
+
+## 추천 URL
+
+- **FMKorea:** `https://www.fmkorea.com/football_world`
+- **DCInside:** `https://gall.dcinside.com/board/lists/?id=football_new9`
+- **Arca Live:** `https://arca.live/b/rogersfu`
+
+## 지원 URL 형식
+
+HTTPS URL만 지원합니다. `<gallery>`와 `<channel>`은 영문자, 숫자, `_`, `-`로 이루어진 1~80자 식별자이고 `<article>`은 숫자입니다.
+
+- FMKorea board: `https://www.fmkorea.com/football_world`
+- FMKorea post: `https://www.fmkorea.com/<article>`
+- DCInside 일반 gallery: `https://gall.dcinside.com/board/lists/?id=<gallery>`, `https://gall.dcinside.com/board/view/?id=<gallery>&no=<article>`
+- DCInside minor gallery: `https://gall.dcinside.com/mgallery/board/lists/?id=<gallery>`, `https://gall.dcinside.com/mgallery/board/view/?id=<gallery>&no=<article>`
+- DCInside mini gallery: `https://gall.dcinside.com/mini/board/lists/?id=<gallery>`, `https://gall.dcinside.com/mini/board/view/?id=<gallery>&no=<article>`
+- DCInside mobile: `https://m.dcinside.com/board/<gallery>`, `https://m.dcinside.com/board/<gallery>/<article>`
+- Arca Live channel: `https://arca.live/b/<channel>`, `https://arca.live/b/<channel>/<article>`
+
+## 데이터와 browser state
+
+Docker에서는 named volume `commu-data`가 컨테이너의 `/data`에 연결됩니다.
+
+```text
+/data/
+├── cache.db
+├── url-history.json
+└── browser-state/
+    ├── fmk.json
+    ├── dcinside.json
+    └── arca.json
+```
+
+Host에서 native로 실행할 때 cache는 `~/.cache/commu/cache.db`, URL history는 `~/.cache/commu/url-history.json`에 저장됩니다. `COMMU_DATA_DIR` 환경 변수를 설정하면 전체 데이터 root를 바꿀 수 있습니다.
+
+`browser-state/*.json`에는 cookie와 origin storage가 포함될 수 있습니다. 공개 저장소에 commit하거나 다른 사람과 공유하지 마세요.
+
+### Site 하나만 초기화하기
+
+Commu를 종료한 뒤 필요한 state 파일만 삭제합니다. 예를 들어 Arca Live state를 초기화하려면 다음 명령을 사용합니다.
+
+macOS / Linux:
+
+```bash
+docker compose run --rm --entrypoint sh commu -c 'rm -f /data/browser-state/arca.json'
+```
+
+Windows PowerShell:
+
+```powershell
+docker compose run --rm --entrypoint sh commu `
+  -c 'rm -f /data/browser-state/arca.json'
+```
+
+`fmk.json` 또는 `dcinside.json`도 같은 방식으로 삭제할 수 있습니다.
+
+### 모든 데이터를 초기화하기
+
+다음 명령은 cache, URL history, 모든 browser state를 포함한 named volume 전체를 영구 삭제합니다. 실행 중인 Commu container가 없어야 하며, 필요한 데이터가 없는지 먼저 확인하세요.
+
+```bash
+docker volume rm commu-data
+```
+
+## 미디어 표시
+
+이미지와 동영상은 다운로드하거나 terminal에 표시하지 않고 text placeholder로 나타냅니다.
+
+- FMKorea: `[Image omitted]`, `[Video omitted]`
+- DCInside: `[Image]`, `[Video]`, `[DCCon]`
+- Arca Live: `[Image]`, `[Video]`
+
+## 문제 해결
+
+### Docker가 실행되지 않음
+
+Docker Desktop이 실행 중인지 확인한 뒤 Compose 설정을 검사합니다.
+
+```bash
+docker version
+docker compose version
+docker compose config --quiet
+```
+
+### 코드 변경이 반영되지 않음
+
+이미지를 다시 빌드합니다.
+
+```bash
+docker compose run --rm --build commu
+```
+
+### 첫 실행이 오래 걸림
+
+Playwright 기반 이미지와 Chromium을 처음 내려받는 과정은 용량이 큽니다. Download가 진행 중이라면 정상입니다. 중간에 실패했다면 network와 Docker disk 여유 공간을 확인한 뒤 같은 명령을 다시 실행하세요.
+
+### HTTP 403, 429 또는 430
+
+Community server가 접근을 거부하거나 요청 간격을 제한한 상태입니다. `r`을 반복해서 누르지 마세요. `Retry-After`가 표시되면 안내된 시간만큼 기다립니다. 저장된 cache가 있으면 Commu가 cache 내용을 표시합니다.
+
+### 빈 화면 또는 access blocked
+
+사이트가 CAPTCHA나 browser challenge를 요구할 수 있습니다. Commu는 이를 우회하지 않습니다. 잠시 뒤 다시 시도하거나 해당 사이트를 일반 browser에서 직접 확인하세요.
+
+### `commu` 명령을 찾을 수 없음
+
+이 문제는 native 설치에서만 발생합니다. Virtual environment가 활성화됐는지 확인하고 package를 다시 설치합니다.
+
+```bash
+python -m pip install .
+```
+
+## 선택 사항: Native 설치
+
+Docker 없이 실행하려면 Python 3.12 이상과 Playwright browser dependencies가 필요합니다. OS별 차이가 있으므로 팀 공유에는 Docker 방식을 권장합니다.
 
 ### macOS / Linux
 
 ```bash
-cd terminal_community
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 python -m pip install --no-deps .
+python -m playwright install --with-deps chromium
 commu
 ```
 
 ### Windows PowerShell
 
 ```powershell
-cd terminal_community
 py -3.12 -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 python -m pip install --no-deps .
+python -m playwright install chromium
 commu
 ```
 
-새 터미널을 열면 가상환경을 다시 활성화해야 합니다.
+새 terminal을 열면 virtual environment를 다시 활성화해야 합니다.
 
-```bash
-# macOS / Linux
-source .venv/bin/activate
-```
+## 선택 사항: Docker 직접 실행
 
-```powershell
-# Windows PowerShell
-.venv\Scripts\Activate.ps1
-```
-
-### Docker
-
-[Docker Desktop](https://www.docker.com/products/docker-desktop/) 또는 Docker Compose v2를 지원하는 호환 Docker Engine이 필요합니다. Docker Desktop에서도 저장소 폴더가 파일 공유 대상이어야 합니다. 저장소 루트에서 다음 명령을 실행하세요.
-
-```bash
-# 첫 실행 또는 소스 변경 후 재빌드
-docker compose run --rm --build commu
-
-# 이후 실행
-docker compose run --rm commu
-```
-
-앱은 `q`를 눌러 종료합니다. `--rm`은 실행 컨테이너만 삭제하며 named volume `commu-data`는 유지합니다. 따라서 캐시, URL 기록, browser storage state는 컨테이너의 `/data`에 남아 다음 실행에서도 사용됩니다.
-
-#### 직접 Docker 실행
-
-Compose 대신 직접 이미지를 빌드하고 실행하려면 저장소에 포함된 `docker/seccomp_profile.json`을 Playwright Chromium용 seccomp 프로필로 지정합니다.
+Compose 대신 직접 image를 빌드하고 실행할 수 있습니다. 저장소의 `docker/seccomp_profile.json`을 Playwright Chromium용 seccomp profile로 사용합니다.
 
 macOS / Linux:
 
@@ -102,11 +276,25 @@ docker run --rm -it --init --shm-size=1gb `
   commu
 ```
 
-컨테이너에서는 `COMMU_DATA_DIR=/data`가 기본값이고 named volume `commu-data`가 그 경로에 연결됩니다. 자세한 파일 구조와 초기화 방법은 [캐시와 브라우저 상태](#캐시와-브라우저-상태)를 참고하세요.
+## Network와 접근 정책
 
-### 기존 버전에서 업그레이드
+Site별 request는 직렬화되며, 최초 탐색과 제한된 복구 탐색(`goto` / `reload`)은 최소 2초 간격으로 시작합니다. 각 탐색 간격에는 0~1초 random jitter가 추가됩니다. 모든 site의 HTTP 429와 FMKorea의 HTTP 430 응답은 `Retry-After` 값에 따라 local cooldown을 설정합니다. Cooldown 중에는 새 request를 보내거나 자동 재시도하지 않습니다.
 
-이전 배포명과 새 배포명이 다르므로 구버전을 제거한 뒤 다시 설치합니다.
+Commu는 site별 headless Chromium session으로 공개 페이지를 render합니다. 정상 종료 시 site별 storage state를 저장해 다음 실행에서 재사용하지만, 이는 접근 성공을 보장하는 우회 수단이 아닙니다. CAPTCHA, Turnstile, JavaScript/WASM challenge를 해결하거나 우회하지 않으며 Cloudflare 또는 각 site의 접근 허용을 보장하지 않습니다.
+
+FMKorea는 정보가 풍부한 `www.fmkorea.com` desktop 페이지를 먼저 요청합니다. Challenge reload 뒤에도 차단되면 같은 browser session에서 경로와 query를 유지한 `m.fmkorea.com` URL을 한 번 요청합니다. Mobile fallback도 실패하거나 rate limit, timeout, cross-origin 오류가 발생하면 추가 origin 전환 없이 종료하고 사용 가능한 cache를 표시합니다.
+
+탐색과 필요한 content selector 대기는 각각 최대 10초입니다. Challenge reload, browser session 재생성, FMKorea mobile fallback은 각 요청의 제한된 recovery budget 안에서 최대 한 번씩만 수행합니다. 접근할 수 없으면 명시적인 오류와 함께 사용 가능한 cache를 표시합니다.
+
+## 개발 및 테스트
+
+```bash
+python -m pip install -e '.[dev]'
+python -m pytest -q
+python -m ruff check .
+```
+
+기존 `fmk-reader` 배포에서 업그레이드한다면 이전 package를 제거한 뒤 설치하세요.
 
 ```bash
 python -m pip uninstall fmk-reader
@@ -115,138 +303,6 @@ python -m pip install --no-deps .
 commu --help
 ```
 
-## 실행
+## 한 줄 요약
 
-인자 없이 실행하면 커뮤니티와 접속 방식을 고르는 시작 메뉴가 열립니다.
-
-```bash
-commu
-```
-
-시작 메뉴에서 `↑` / `↓`로 이동하고 `Enter`로 선택합니다. 사이트를 고른 뒤 추천 게시판을 열거나 URL을 직접 입력할 수 있습니다. 이전에 직접 입력했던 URL이 있으면 같은 사이트의 최근 URL로 함께 표시되며, 선택하면 바로 연결됩니다. URL 입력 단계의 `Esc`는 접속 방식 선택으로, 접속 방식 선택 단계의 `Esc`는 사이트 선택으로 돌아갑니다.
-
-URL을 인자로 전달하면 시작 메뉴를 건너뜁니다. 게시판 URL은 목록을, 게시글 URL은 해당 글의 본문과 댓글을 바로 엽니다.
-
-```bash
-commu https://www.fmkorea.com/football_world
-commu https://gall.dcinside.com/board/lists/?id=football_new9
-commu https://arca.live/b/rogersfu
-```
-
-## 추천 URL
-
-- FMKorea: `https://www.fmkorea.com/football_world`
-- 디시인사이드: `https://gall.dcinside.com/board/lists/?id=football_new9`
-- 아카라이브: `https://arca.live/b/rogersfu`
-
-## 지원 URL
-
-HTTPS URL만 지원합니다. `<gallery>`, `<channel>`은 영문자, 숫자, `_`, `-`로 이루어진 1~80자 식별자이고 `<article>`은 숫자입니다.
-
-- FMKorea 목록: `https://www.fmkorea.com/football_world`
-- FMKorea 게시글: `https://www.fmkorea.com/<article>`
-- 디시인사이드 일반 갤러리 목록/게시글: `https://gall.dcinside.com/board/lists/?id=<gallery>`, `https://gall.dcinside.com/board/view/?id=<gallery>&no=<article>`
-- 디시인사이드 마이너 갤러리 목록/게시글: `https://gall.dcinside.com/mgallery/board/lists/?id=<gallery>`, `https://gall.dcinside.com/mgallery/board/view/?id=<gallery>&no=<article>`
-- 디시인사이드 미니 갤러리 목록/게시글: `https://gall.dcinside.com/mini/board/lists/?id=<gallery>`, `https://gall.dcinside.com/mini/board/view/?id=<gallery>&no=<article>`
-- 디시인사이드 모바일 목록/게시글: `https://m.dcinside.com/board/<gallery>`, `https://m.dcinside.com/board/<gallery>/<article>`
-- 아카라이브 목록/게시글: `https://arca.live/b/<channel>`, `https://arca.live/b/<channel>/<article>`
-
-## 키보드 조작
-
-- `↑` / `↓`: 시작 메뉴·글 목록 이동 또는 본문 스크롤
-- `←` / `→`: 목록에서는 게시판 페이지, 본문에서는 댓글 페이지 이동
-- `Enter`: 항목 선택 또는 글 열기
-- `Tab`: 목록과 본문 사이에서 포커스 이동
-- `Esc`: 이전 시작 메뉴 단계나 글 목록으로 돌아가기
-- `r`: 현재 목록 또는 글 새로고침
-- `s`: 현재 리더를 닫고 사이트 선택 메뉴 열기
-- `q`: 종료
-
-## 캐시와 브라우저 상태
-
-기본 데이터 디렉터리는 `~/.cache/commu/`입니다. `COMMU_DATA_DIR` 환경 변수를 설정하면 전체 데이터 루트가 바뀌며, Docker 이미지에서는 `/data`로 설정됩니다.
-
-```text
-<COMMU_DATA_DIR>/
-├── cache.db
-├── url-history.json
-└── browser-state/
-    ├── fmk.json
-    ├── dcinside.json
-    └── arca.json
-```
-
-기본 설정에서는 게시판·게시글 캐시가 `~/.cache/commu/cache.db`에, 직접 입력한 URL 기록이 `~/.cache/commu/url-history.json`에 저장됩니다. 캐시 키에는 사이트와 게시판 식별자가 포함되어 서로 다른 커뮤니티의 같은 글 번호가 충돌하지 않습니다. 이전 `~/.cache/fmk-reader/` 캐시는 재사용하거나 자동 삭제하지 않습니다.
-
-`browser-state/*.json`은 Playwright의 쿠키와 origin storage를 포함할 수 있는 민감한 파일입니다. 공개 저장소에 커밋하거나 다른 사람과 공유하지 마세요. 사이트 하나의 브라우저 상태만 초기화하려면 Commu를 종료한 뒤 해당 파일 하나만 삭제합니다. 예를 들어 Docker의 아카라이브 상태만 초기화하려면 다음 명령을 사용합니다.
-
-```bash
-# macOS / Linux
-docker compose run --rm --entrypoint sh commu -c 'rm -f /data/browser-state/arca.json'
-```
-
-```powershell
-# Windows PowerShell
-docker compose run --rm --entrypoint sh commu `
-  -c 'rm -f /data/browser-state/arca.json'
-```
-
-`fmk.json` 또는 `dcinside.json`도 같은 방식으로 삭제할 수 있습니다. 반면 다음 명령은 캐시, URL 기록, 모든 브라우저 상태를 포함한 named volume 전체를 영구 삭제하는 파괴적 초기화입니다. 실행 중인 Commu 컨테이너가 없어야 하며, 필요한 데이터가 없는지 먼저 확인하세요.
-
-```bash
-docker volume rm commu-data
-```
-
-호스트에서 실행할 때도 같은 원칙으로 `<COMMU_DATA_DIR>/browser-state/<site>.json` 하나를 삭제하면 해당 사이트 상태만 초기화할 수 있습니다.
-
-## 미디어
-
-이미지와 동영상은 다운로드하거나 터미널에 표시하지 않고 다음 텍스트로 나타냅니다.
-
-- FMKorea: `[이미지 생략]`, `[동영상 생략]`
-- 디시인사이드: `[이미지]`, `[동영상]`, `[디시콘]`
-- 아카라이브: `[이미지]`, `[동영상]`, `[이모티콘]`
-
-## 네트워크 및 접근 정책
-
-사이트별 요청은 직렬화되며 최초 탐색과 제한된 복구 탐색(goto/reload)은 최소 2초 간격으로 시작합니다. Playwright가 브라우저 내부에서 처리하는 개별 리디렉션 hop에는 별도 간격을 적용하지 않습니다. 봇 탐지를 방지하기 위해 각 탐색 간격에 0~1초의 랜덤 지터(jitter)가 추가됩니다. 모든 사이트의 HTTP 429와 FMKorea의 HTTP 430 응답은 `Retry-After` 값에 따라 로컬 쿨다운을 설정합니다. 쿨다운 중에는 새 요청을 보내거나 자동 재시도하지 않습니다.
-
-### Playwright 접근 범위
-
-Commu는 사이트별 headless Chromium 세션으로 공개 페이지를 렌더링하고, 정상 종료할 때 사이트별 storage state를 저장해 다음 실행에서 다시 사용합니다. 이 상태는 접근 성공을 보장하는 우회 수단이 아닙니다. CAPTCHA, Turnstile, JavaScript/WASM challenge를 해결하거나 우회하지 않으며 Cloudflare 또는 각 사이트의 접근 허용을 보장하지 않습니다.
-
-FMKorea는 정보가 더 풍부한 `www.fmkorea.com` 데스크톱 페이지를 먼저 요청하며, Chromium의 기본 데스크톱 User-Agent를 사용합니다. 데스크톱 페이지가 challenge 재로딩 한 번 뒤에도 접근 차단 상태일 때만 같은 브라우저 세션에서 경로와 query를 유지한 `m.fmkorea.com` URL을 한 번 요청합니다. 모바일 fallback도 차단되거나, rate limit·timeout·cross-origin 오류가 발생하면 추가 origin 전환 없이 종료하고 사용 가능한 캐시를 표시합니다.
-
-브라우저 동작은 무한 재시도하지 않도록 제한되어 있습니다. 탐색과 필요한 콘텐츠 선택자 대기는 각각 최대 10초이며, challenge 페이지가 감지되면 같은 세션에서 재로딩을 최대 한 번만 시도합니다. 브라우저 세션이 고장난 경우의 세션 재생성도 최대 한 번이고, FMKorea의 데스크톱 접근 차단 뒤 모바일 origin 전환도 최대 한 번입니다. 이 복구 예산은 한 요청 전체에서 공유됩니다. 그 뒤에도 접근할 수 없으면 명시적인 접근 차단 또는 가져오기 오류를 표시하고, 사용 가능한 캐시가 있으면 캐시 내용을 표시합니다.
-
-## 문제 해결
-
-### `commu` 명령을 찾을 수 없음
-
-가상환경이 활성화됐는지 확인하고 패키지를 다시 설치합니다.
-
-```bash
-python -m pip install .
-```
-
-### Python 버전 오류
-
-```bash
-python --version
-```
-
-Python 3.12가 아니라면 Python 3.12로 새 가상환경을 만드세요.
-
-### HTTP 403, 429 또는 430
-
-커뮤니티 서버가 접근을 거부하거나 요청 간격을 제한한 상태입니다. `r`을 반복해서 누르지 말고 `Retry-After`가 표시되면 해당 시간만큼 기다리세요. 저장된 캐시가 있으면 Commu가 캐시 내용을 표시합니다.
-
-## 개발 및 테스트
-
-저장소 루트에서 개발 의존성을 editable 모드로 설치합니다.
-
-```bash
-python -m pip install -e '.[dev]'
-python -m pytest -q
-python -m ruff check .
-```
+Clone, Compose, Enter. 나머지는 터미널이 조용히 맡습니다.
