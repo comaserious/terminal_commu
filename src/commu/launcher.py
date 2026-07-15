@@ -8,7 +8,13 @@ from textual.widgets import Input, OptionList, Static
 from textual.widgets.option_list import Option
 
 from commu.errors import TargetError
-from commu.targets import CommunityTarget, RECOMMENDED_URLS, Site, route_url
+from commu.targets import (
+    RECOMMENDED_URLS,
+    SITE_DISPLAY_ORDER,
+    CommunityTarget,
+    Site,
+    route_url,
+)
 from commu.url_history import UrlHistory, UrlHistoryEntry, default_url_history_path
 
 
@@ -70,7 +76,7 @@ class LauncherScreen(Screen[CommunityTarget]):
             yield LauncherOptionList(
                 *(
                     Option(site.display_name, id=site.value)
-                    for site in Site
+                    for site in SITE_DISPLAY_ORDER
                 ),
                 id="launcher-sites",
                 markup=False,

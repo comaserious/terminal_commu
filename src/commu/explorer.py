@@ -15,7 +15,13 @@ from textual.widgets.option_list import Option
 from commu.errors import TargetError
 from commu.launcher import LauncherError
 from commu.models import PostSummary
-from commu.targets import CommunityTarget, RECOMMENDED_URLS, Site, route_url
+from commu.targets import (
+    RECOMMENDED_URLS,
+    SITE_DISPLAY_ORDER,
+    CommunityTarget,
+    Site,
+    route_url,
+)
 from commu.url_history import UrlHistory
 
 
@@ -68,7 +74,7 @@ class NavigationTree(Tree[ExplorerNode]):
         self._board_node = None
         self._post_nodes = {}
         self.root.expand()
-        for site in Site:
+        for site in SITE_DISPLAY_ORDER:
             site_node = self.root.add(
                 Text(f"{site.display_name}/"),
                 ExplorerNode(ExplorerNodeKind.SITE, site=site),

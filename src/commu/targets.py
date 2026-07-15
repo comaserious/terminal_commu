@@ -30,6 +30,11 @@ class Site(str, Enum):
         }[self]
 
 
+SITE_DISPLAY_ORDER: tuple[Site, ...] = tuple(
+    sorted(Site, key=lambda site: site.display_name.casefold())
+)
+
+
 @dataclass(frozen=True, slots=True)
 class CommunityTarget:
     site: Site
