@@ -1,9 +1,272 @@
-LauncherScreen {
-    align: center top;
+Screen {
+    background: #181715;
+    color: #d9d5cc;
 }
 
-#main {
+Header,
+Footer {
+    background: #211f1c;
+    color: #d9d5cc;
+}
+
+FooterKey {
+    background: #211f1c;
+}
+
+FooterKey .footer-key--key {
+    background: #211f1c;
+    color: #d97757;
+    text-style: bold;
+}
+
+FooterKey .footer-key--description {
+    background: #211f1c;
+    color: #928b81;
+}
+
+FooterKey:hover {
+    background: #332a24;
+}
+
+ExplorerShell {
     height: 1fr;
+    background: #181715;
+}
+
+#path-bar {
+    height: 1;
+    padding: 0 1;
+    background: #211f1c;
+    color: #d97757;
+    text-style: bold;
+}
+
+#explorer-body {
+    height: 1fr;
+}
+
+.explorer-pane {
+    height: 1fr;
+    background: #181715;
+    border: solid #4a4640;
+}
+
+.explorer-pane:focus-within {
+    border: solid #d97757;
+}
+
+#explorer-tree-pane {
+    width: 24%;
+}
+
+#explorer-access-pane {
+    width: 76%;
+    padding: 0 1;
+}
+
+#post-list-pane {
+    width: 76%;
+}
+
+ExplorerShell.reading #post-list-pane {
+    width: 31%;
+}
+
+#article-pane {
+    width: 45%;
+    padding: 0 1;
+}
+
+ExplorerShell.narrow .explorer-pane {
+    width: 100%;
+}
+
+#tree-hint,
+#access-hint,
+#list-hint,
+#article-hint,
+#global-hints {
+    height: 1;
+    padding: 0 1;
+    background: #211f1c;
+    color: #928b81;
+}
+
+#global-hints {
+    color: #928b81;
+}
+
+#navigation-tree,
+#post-list {
+    width: 100%;
+    height: 1fr;
+    background: #181715;
+}
+
+#navigation-tree > .tree--cursor {
+    background: #332a24;
+    color: #fff8ef;
+    text-style: bold;
+}
+
+#navigation-tree:focus {
+    background: #181715;
+    background-tint: #000000 0%;
+}
+
+#navigation-tree:focus > .tree--cursor {
+    background: #d97757;
+    color: #181715;
+    text-style: bold;
+}
+
+#navigation-tree > .tree--guides,
+#navigation-tree > .tree--guides-hover {
+    color: #4a4640;
+}
+
+#navigation-tree > .tree--guides-selected {
+    color: #928b81;
+}
+
+#navigation-tree:focus > .tree--guides-selected {
+    color: #d97757;
+}
+
+#access-title {
+    height: 3;
+    padding: 1 1 0 1;
+    color: #d97757;
+    text-style: bold;
+}
+
+#access-hint {
+    margin-bottom: 1;
+}
+
+#explorer-access,
+#explorer-target-url {
+    width: 100%;
+}
+
+OptionList,
+Input {
+    background: #181715;
+    color: #d9d5cc;
+    border: solid #4a4640;
+}
+
+OptionList:focus,
+Input:focus {
+    background: #181715;
+    background-tint: #000000 0%;
+    border: solid #d97757;
+}
+
+OptionList > .option-list--option-highlighted {
+    background: #332a24;
+    color: #fff8ef;
+    text-style: bold;
+}
+
+OptionList:focus > .option-list--option-highlighted {
+    background: #d97757;
+    color: #181715;
+    text-style: bold;
+}
+
+OptionList > .option-list--option-hover {
+    background: #332f2b;
+    color: #fff8ef;
+}
+
+Input > .input--cursor {
+    background: #d97757;
+    color: #181715;
+    text-style: bold;
+}
+
+Input > .input--selection {
+    background: #332a24;
+    color: #fff8ef;
+}
+
+#explorer-tree-pane:focus-within #tree-hint,
+#explorer-access-pane:focus-within #access-hint,
+#post-list-pane:focus-within #list-hint,
+#article-pane:focus-within #article-hint {
+    background: #332a24;
+    color: #fff8ef;
+    text-style: bold;
+}
+
+#explorer-access-error,
+#launcher-error {
+    color: #e06c75;
+    min-height: 1;
+    margin-top: 1;
+}
+
+#article-title {
+    height: auto;
+    color: #e5b567;
+    text-style: bold;
+    margin: 1 0 0 0;
+}
+
+#article-meta {
+    height: auto;
+    color: #928b81;
+    margin-bottom: 1;
+}
+
+#article-content {
+    height: auto;
+    color: #d9d5cc;
+}
+
+PostItem {
+    height: auto;
+    padding: 1 1 0 1;
+    border-bottom: solid #332f2b;
+}
+
+PostItem .post-heading {
+    height: auto;
+}
+
+PostItem .post-category {
+    width: auto;
+    margin-right: 1;
+    color: #d97757;
+}
+
+PostItem .post-title {
+    width: 1fr;
+    height: auto;
+    color: #d9d5cc;
+    text-style: bold;
+}
+
+PostItem .post-meta {
+    color: #928b81;
+    margin-bottom: 1;
+}
+
+#post-list > PostItem.-highlight,
+#post-list:focus > PostItem.-highlight {
+    background: #332a24;
+    border-left: thick #d97757;
+    padding-left: 0;
+}
+
+#post-list > PostItem.-highlight .post-meta,
+#post-list:focus > PostItem.-highlight .post-meta {
+    color: #d9d5cc;
+}
+
+LauncherScreen {
+    align: center top;
 }
 
 #launcher {
@@ -13,60 +276,10 @@ LauncherScreen {
     max-height: 24;
     margin: 3 0;
     padding: 1 2;
-    border: round $primary;
+    border: solid #4a4640;
 }
 
 #launcher-title {
     text-style: bold;
     margin-bottom: 1;
-}
-
-#launcher-error {
-    color: $error;
-    min-height: 1;
-    margin-top: 1;
-}
-
-#post-list {
-    width: 38%;
-    border-right: solid $primary;
-}
-
-#article-pane {
-    width: 62%;
-    padding: 0 2;
-}
-
-#article-title {
-    text-style: bold;
-    color: $warning;
-    margin-bottom: 1;
-}
-
-#article-meta {
-    color: $text-muted;
-    margin-bottom: 1;
-}
-
-#main.narrow #post-list {
-    width: 100%;
-    display: block;
-}
-
-#main.narrow #article-pane {
-    width: 100%;
-    display: none;
-}
-
-#main.narrow.reading #post-list {
-    display: none;
-}
-
-#main.narrow.reading #article-pane {
-    display: block;
-}
-
-PostItem {
-    height: auto;
-    padding: 0 1;
 }

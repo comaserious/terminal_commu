@@ -212,9 +212,9 @@ def _render_content(content: Tag) -> tuple[str, tuple[str, ...]]:
     for line_break in rendered.select("br"):
         line_break.replace_with("\n")
     for image in rendered.select("img"):
-        image.replace_with("[이미지 생략]")
+        image.replace_with("[Image omitted]")
     for video in rendered.select("video, iframe"):
-        video.replace_with("[동영상 생략]")
+        video.replace_with("[Video omitted]")
 
     lines = (
         normalized

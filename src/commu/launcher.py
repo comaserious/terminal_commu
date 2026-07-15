@@ -51,10 +51,10 @@ class LauncherScreen(Screen[CommunityTarget]):
     """Select and validate a community target without creating resources."""
 
     BINDINGS = [
-        Binding("up", "move_up", "위", priority=True),
-        Binding("down", "move_down", "아래", priority=True),
-        Binding("enter", "select", "선택", priority=True),
-        Binding("escape", "back", "뒤로", priority=True),
+        Binding("up", "move_up", "Up", priority=True),
+        Binding("down", "move_down", "Down", priority=True),
+        Binding("enter", "select", "Select", priority=True),
+        Binding("escape", "back", "Back", priority=True),
     ]
 
     def __init__(self, url_history: UrlHistory | None = None) -> None:
@@ -66,7 +66,7 @@ class LauncherScreen(Screen[CommunityTarget]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="launcher"):
-            yield Static("커뮤니티 선택", id="launcher-title", markup=False)
+            yield Static("Select community", id="launcher-title", markup=False)
             yield LauncherOptionList(
                 *(
                     Option(site.display_name, id=site.value)
@@ -79,7 +79,7 @@ class LauncherScreen(Screen[CommunityTarget]):
             access.display = False
             yield access
             target_url = Input(
-                placeholder="지원하는 게시판 또는 게시글 URL",
+                placeholder="Supported board or post URL",
                 id="target-url",
             )
             target_url.display = False
@@ -201,16 +201,16 @@ class LauncherScreen(Screen[CommunityTarget]):
         )
         access.clear_options()
         access.add_option(
-            Option("추천 게시판", id="recommended")
+            Option("Recommended board", id="recommended")
         )
         for index, entry in enumerate(self._history_entries):
             access.add_option(
                 Option(
-                    f"최근 URL · {entry.label}",
+                    f"Recent URL · {entry.label}",
                     id=f"{_HISTORY_OPTION_PREFIX}{index}",
                 )
             )
-        access.add_option(Option("URL 직접 입력", id="direct"))
+        access.add_option(Option("Enter URL", id="direct"))
         access.display = True
         access.highlighted = 0
         self.query_one("#target-url", Input).display = False

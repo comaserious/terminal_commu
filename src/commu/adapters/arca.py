@@ -78,11 +78,11 @@ def _render_content(content: Tag) -> tuple[str, tuple[str, ...]]:
     for media in rendered.select("img, video, iframe"):
         classes = media.get("class", [])
         if "arca-emoticon" in classes:
-            placeholder = "[이모티콘]"
+            placeholder = "[Emoji]"
         elif media.name == "img":
-            placeholder = "[이미지]"
+            placeholder = "[Image]"
         else:
-            placeholder = "[동영상]"
+            placeholder = "[Video]"
         media.replace_with(placeholder)
 
     lines = (
@@ -168,7 +168,7 @@ def _linked_board_page(href: str, board_id: str) -> int | None:
 class ArcaAdapter:
     target: CommunityTarget
 
-    site_name: ClassVar[str] = "아카라이브"
+    site_name: ClassVar[str] = "Arca Live"
     policy: ClassVar[RequestPolicy] = RequestPolicy(
         site=Site.ARCA,
         user_agent="commu/0.1 personal read-only client",
@@ -198,7 +198,7 @@ class ArcaAdapter:
             return None
         return PostSummary(
             post_id=self.target.article_id,
-            title=f"글 {self.target.article_id}",
+            title=f"Post {self.target.article_id}",
             category="",
             author="",
             created_at="",
@@ -214,7 +214,7 @@ class ArcaAdapter:
         container = _required(
             soup,
             ".article-list",
-            "아카라이브 게시판 목록 구조를 찾을 수 없습니다",
+            f"{self.site_name} board list structure not found",
         )
         posts: list[PostSummary] = []
         for row in container.select(".vrow[href]"):
@@ -243,7 +243,7 @@ class ArcaAdapter:
             )
 
         if not posts:
-            raise ParseError("아카라이브 게시글 목록 구조를 찾을 수 없습니다")
+            raise ParseError(f"{self.site_name} post list structure not found")
         linked_pages = {
             linked_page
             for anchor in soup.select(".pagination-wrapper .page-link[href]")
@@ -275,26 +275,26 @@ class ArcaAdapter:
             else None
         )
         if identity is None:
-            raise ParseError("아카라이브 게시글 정보 구조를 찾을 수 없습니다")
+            raise ParseError(f"{self.site_name} post info structure not found")
         if identity != (self.target.board_id, post.post_id):
-            raise ParseError("아카라이브 게시글 정보가 요청과 일치하지 않습니다")
+            raise ParseError(f"{self.site_name} post does not match the request")
 
         head = _required(
             soup,
             ".article-head",
-            "아카라이브 게시글 제목 구조를 찾을 수 없습니다",
+            f"{self.site_name} post title structure not found",
         )
         title = _article_title(head)
         if not title:
-            raise ParseError("아카라이브 게시글 제목 구조를 찾을 수 없습니다")
+            raise ParseError(f"{self.site_name} post title structure not found")
         body_node = _required(
             soup,
             ".article-content",
-            "아카라이브 게시글 본문 구조를 찾을 수 없습니다",
+            f"{self.site_name} post body structure not found",
         )
         body, links = _render_content(body_node)
         if not body:
-            raise ParseError("아카라이브 게시글 본문 구조를 찾을 수 없습니다")
+            raise ParseError(f"{self.site_name} post body structure not found")
 
         info = head.select_one(".article-info")
         views = _labeled_value(info, "조회수") if isinstance(info, Tag) else ""

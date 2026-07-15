@@ -105,7 +105,7 @@ class CommunityService:
             return LoadResult(
                 value=stale,
                 source=DataSource.STALE_CACHE,
-                warning=_stale_warning(exc, "게시판", self.adapter.site_name),
+                warning=_stale_warning(exc, "board", self.adapter.site_name),
             )
 
         self._cache.put(key, board.to_dict())
@@ -137,7 +137,7 @@ class CommunityService:
                     source=DataSource.STALE_CACHE,
                     warning=_stale_warning(
                         exc,
-                        "게시글과 댓글",
+                        "post and comments",
                         self.adapter.site_name,
                     ),
                 )
@@ -156,7 +156,7 @@ class CommunityService:
                 source=DataSource.STALE_CACHE,
                 warning=_stale_warning(
                     exc,
-                    "게시글 본문",
+                    "post body",
                     self.adapter.site_name,
                 ),
             )
@@ -202,10 +202,8 @@ def _stale_warning(
     site_name: str,
 ) -> str:
     if isinstance(error, RateLimited):
-        reason = f"{site_name} 요청 제한"
+        reason = f"{site_name} rate limit"
         if error.retry_after is not None:
             reason += f" (Retry-After: {error.retry_after})"
-        return f"{reason}으로 {subject}의 저장된 내용을 표시합니다."
-    return (
-        f"{error}: 현재 커뮤니티에 연결할 수 없어 {subject}의 저장된 내용을 표시합니다."
-    )
+        return f"{reason}; showing saved {subject} content."
+    return f"{error}: community unavailable; showing saved {subject} content."

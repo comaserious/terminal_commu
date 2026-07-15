@@ -83,10 +83,10 @@ def _render_content(content: Tag) -> tuple[str, tuple[str, ...]]:
         line_break.replace_with("\n")
     for image in rendered.select("img"):
         classes = image.get("class", [])
-        placeholder = "[디시콘]" if "written_dccon" in classes else "[이미지]"
+        placeholder = "[DCCon]" if "written_dccon" in classes else "[Image]"
         image.replace_with(placeholder)
     for video in rendered.select("video, iframe"):
-        video.replace_with("[동영상]")
+        video.replace_with("[Video]")
 
     lines = (
         normalized
@@ -141,7 +141,7 @@ def _linked_comment_page(
 class DcinsideAdapter:
     target: CommunityTarget
 
-    site_name: ClassVar[str] = "디시인사이드"
+    site_name: ClassVar[str] = "DCInside"
     policy: ClassVar[RequestPolicy] = RequestPolicy(
         site=Site.DCINSIDE,
         user_agent=_MOBILE_USER_AGENT,
@@ -171,7 +171,7 @@ class DcinsideAdapter:
             return None
         return PostSummary(
             post_id=self.target.article_id,
-            title=f"글 {self.target.article_id}",
+            title=f"Post {self.target.article_id}",
             category="",
             author="",
             created_at="",
@@ -187,7 +187,7 @@ class DcinsideAdapter:
         container = _required(
             soup,
             "ul.gall-detail-lst",
-            "디시인사이드 게시판 목록 구조를 찾을 수 없습니다",
+            f"{self.site_name} board list structure not found",
         )
         posts: list[PostSummary] = []
         for row in container.select(".gall-detail-lnktb"):
@@ -239,7 +239,7 @@ class DcinsideAdapter:
             )
 
         if not posts:
-            raise ParseError("디시인사이드 게시글 목록 구조를 찾을 수 없습니다")
+            raise ParseError(f"{self.site_name} post list structure not found")
         has_next = any(
             _normalize_text(anchor) == "다음" or "btn-next" in anchor.get("class", [])
             for anchor in soup.select(".paging a[href], a.btn-next[href]")
@@ -265,26 +265,26 @@ class DcinsideAdapter:
             else None
         )
         if identity is None:
-            raise ParseError("디시인사이드 게시글 정보 구조를 찾을 수 없습니다")
+            raise ParseError(f"{self.site_name} post info structure not found")
         if identity != (self.target.board_id, post.post_id):
-            raise ParseError("디시인사이드 게시글 정보가 요청과 일치하지 않습니다")
+            raise ParseError(f"{self.site_name} post does not match the request")
 
         title_node = _required(
             soup,
             ".gallview-tit-box > .tit",
-            "디시인사이드 게시글 제목 구조를 찾을 수 없습니다",
+            f"{self.site_name} post title structure not found",
         )
         title = _normalize_text(title_node)
         if not title:
-            raise ParseError("디시인사이드 게시글 제목 구조를 찾을 수 없습니다")
+            raise ParseError(f"{self.site_name} post title structure not found")
         body_node = _required(
             soup,
             ".gall-thum-btm .thum-txt .thum-txtin",
-            "디시인사이드 게시글 본문 구조를 찾을 수 없습니다",
+            f"{self.site_name} post body structure not found",
         )
         body, links = _render_content(body_node)
         if not body:
-            raise ParseError("디시인사이드 게시글 본문 구조를 찾을 수 없습니다")
+            raise ParseError(f"{self.site_name} post body structure not found")
 
         stats = soup.select_one(".gall-thum-btm-inner > ul.ginfo2")
         views = str(_labeled_integer(stats, "조회수")) if stats else "0"

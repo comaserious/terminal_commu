@@ -110,7 +110,7 @@ class FmkAdapter:
             return None
         return PostSummary(
             post_id=self.target.article_id,
-            title=f"글 {self.target.article_id}",
+            title=f"Post {self.target.article_id}",
             category="",
             author="",
             created_at="",

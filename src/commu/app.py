@@ -11,7 +11,7 @@ from typing import Protocol
 
 from textual import events, work
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal
 from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
 from commu.adapters import CommunityAdapter, adapter_for
@@ -22,7 +22,13 @@ from commu.client import (
     PlaywrightCommunityClient,
 )
 from commu.errors import ReaderError
-from commu.launcher import LauncherScreen
+from commu.explorer import (
+    AccessPane,
+    ArticlePane,
+    ExplorerNodeKind,
+    ExplorerShell,
+    NavigationTree,
+)
 from commu.models import Comment, PageResult, PostSummary
 from commu.paths import cache_path
 from commu.service import CommunityService, LoadResult, PostPage
@@ -105,27 +111,38 @@ class PostItem(ListItem):
 
     def __init__(self, post: PostSummary) -> None:
         self.post = post
-        text = (
-            f"[{post.category}] {post.title}\n"
-            f"추천 {post.votes} · 댓글 {post.comment_count} · {post.created_at}"
+        heading_children: list[Label] = []
+        if post.category:
+            heading_children.append(
+                Label(
+                    f"[{post.category}]",
+                    classes="post-category",
+                    markup=False,
+                )
+            )
+        heading_children.append(
+            Label(post.title, classes="post-title", markup=False)
         )
-        super().__init__(Label(text, markup=False))
-
-
-class ArticlePane(VerticalScroll):
-    can_focus = True
+        heading = Horizontal(*heading_children, classes="post-heading")
+        metadata = Label(
+            f"Votes {post.votes} · Comments {post.comment_count} · "
+            f"{post.created_at}",
+            classes="post-meta",
+            markup=False,
+        )
+        super().__init__(heading, metadata)
 
 
 class CommunityReaderApp(App[None]):
     TITLE = "Commu"
     CSS_PATH = Path(__file__).with_name("styles.tcss")
     BINDINGS = [
-        ("left", "previous_page", "이전 페이지"),
-        ("right", "next_page", "다음 페이지"),
-        ("r", "refresh", "새로고침"),
-        ("escape", "back", "목록"),
-        ("s", "switch_site", "사이트 선택"),
-        ("q", "quit", "종료"),
+        ("left", "previous_page", "Previous page"),
+        ("right", "next_page", "Next page"),
+        ("r", "refresh", "Refresh"),
+        ("escape", "back", "Back"),
+        ("s", "switch_site", "Select site"),
+        ("q", "quit", "Quit"),
     ]
 
     def _get_dom_base(self):
@@ -180,25 +197,17 @@ class CommunityReaderApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        with Horizontal(id="main"):
-            yield ListView(id="post-list")
-            with ArticlePane(id="article-pane"):
-                yield Static(
-                    "글을 선택하세요",
-                    id="article-title",
-                    markup=False,
-                )
-                yield Static("", id="article-meta", markup=False)
-                yield Static("", id="article-content", markup=False)
+        yield ExplorerShell(self.url_history, id="explorer-shell")
         yield Footer()
 
     async def on_mount(self) -> None:
         self._sync_layout(self.size.width)
-        self.query_one("#post-list", ListView).focus()
         await self.browser_runtime.start()
         if self._initial_target is None:
-            self._open_launcher()
+            self.query_one(ExplorerShell).show_root()
+            self.query_one(NavigationTree).focus()
             return
+        self.query_one("#post-list", ListView).focus()
         self._begin_activation(self._initial_target, self._injected_service)
 
     async def on_unmount(self) -> None:
@@ -242,6 +251,49 @@ class CommunityReaderApp(App[None]):
             return
         self._begin_activation(target)
 
+    def on_access_pane_target_selected(
+        self, event: AccessPane.TargetSelected
+    ) -> None:
+        if self._activation_in_progress:
+            return
+        self._begin_activation(event.target)
+
+    async def on_navigation_tree_node_activated(
+        self, event: NavigationTree.NodeActivated
+    ) -> None:
+        node = event.node
+        shell = self.query_one(ExplorerShell)
+        if node.kind is ExplorerNodeKind.ROOT:
+            if self.target is not None:
+                await self._switch_site()
+            else:
+                shell.show_root()
+            return
+        if node.kind is ExplorerNodeKind.SITE and node.site is not None:
+            if self.target is not None:
+                await self._switch_site(node.site)
+            else:
+                shell.show_site(node.site)
+            return
+        if node.kind is ExplorerNodeKind.DIRECT and node.site is not None:
+            shell.show_site(node.site)
+            shell.query_one(AccessPane).show_url_input()
+            return
+        if node.kind is ExplorerNodeKind.BOARD:
+            shell.show_list()
+            self.query_one("#post-list", ListView).focus()
+            return
+        if node.kind is ExplorerNodeKind.POST and node.post is not None:
+            post_list = self.query_one("#post-list", ListView)
+            for index, item in enumerate(post_list.children):
+                if isinstance(item, PostItem) and item.post == node.post:
+                    post_list.index = index
+                    break
+            self._open_post(node.post)
+            return
+        if node.target is not None and not self._activation_in_progress:
+            self._begin_activation(node.target)
+
     def _begin_activation(
         self,
         target: CommunityTarget,
@@ -250,7 +302,7 @@ class CommunityReaderApp(App[None]):
         self._activation_generation += 1
         generation = self._activation_generation
         self._activation_in_progress = True
-        self._show_activation_loading()
+        self._show_activation_loading(target)
         self._activate_target(target, injected_service, generation)
 
     @work(exclusive=True, group="activation")
@@ -289,11 +341,11 @@ class CommunityReaderApp(App[None]):
                 self._activation_in_progress = False
                 self._clear_uncommitted_activation()
                 self.notify(
-                    f"커뮤니티를 준비하지 못했습니다: {error}",
+                    f"Could not prepare community: {error}",
                     severity="error",
                     markup=False,
                 )
-                self._open_launcher()
+                self.query_one(ExplorerShell).show_site(target.site)
             return
 
         if generation != self._activation_generation:
@@ -324,7 +376,9 @@ class CommunityReaderApp(App[None]):
         self.comments_have_next = False
         self._displayed_post_id = None
         self._show_loading(direct_post)
-        self.query_one("#main", Horizontal).add_class("reading")
+        shell = self.query_one(ExplorerShell)
+        shell.show_board(target, (direct_post,))
+        shell.show_article(direct_post)
         self.query_one("#article-pane", ArticlePane).focus()
         self.load_post(post=direct_post, target_page=1)
 
@@ -342,7 +396,7 @@ class CommunityReaderApp(App[None]):
                 original_error.add_note(f"Cleanup error: {cleanup_error}")
         elif cleanup_errors:
             self.notify(
-                "사용하지 않는 리소스를 닫는 중 오류가 발생했습니다: "
+                "Unused resource cleanup failed: "
                 f"{cleanup_errors[0]}",
                 severity="error",
                 markup=False,
@@ -383,14 +437,14 @@ class CommunityReaderApp(App[None]):
             return status
         return f"{self._reader_context} · {status}"
 
-    def _show_activation_loading(self) -> None:
-        self.default_screen.query_one("#main", Horizontal).remove_class("reading")
+    def _show_activation_loading(self, target: CommunityTarget) -> None:
+        self.default_screen.query_one(ExplorerShell).show_loading(target)
         self.default_screen.query_one("#article-title", Static).update(
-            "커뮤니티 준비 중"
+            "Preparing community"
         )
-        self.default_screen.query_one("#article-meta", Static).update("준비 중...")
+        self.default_screen.query_one("#article-meta", Static).update("Preparing...")
         self.default_screen.query_one("#article-content", Static).update("")
-        self.sub_title = "커뮤니티 준비 중"
+        self.sub_title = "Preparing community"
 
     def _clear_uncommitted_activation(self) -> None:
         self.target = None
@@ -401,9 +455,7 @@ class CommunityReaderApp(App[None]):
         self._owns_resources = False
 
     def _open_launcher(self) -> None:
-        if isinstance(self.screen, LauncherScreen):
-            return
-        self.push_screen(LauncherScreen(self.url_history), self._accept_target)
+        self.query_one(ExplorerShell).show_root()
 
     async def _release_owned_resources(self) -> None:
         if not self._owns_resources:
@@ -472,8 +524,14 @@ class CommunityReaderApp(App[None]):
             self.board_page = result.value.page
             self.board_has_previous = result.value.has_previous
             self.board_has_next = result.value.has_next
+            if self.target is not None:
+                self.query_one(ExplorerShell).show_board(
+                    self.target,
+                    result.value.items,
+                )
+                post_list.focus()
             self.sub_title = self._status_with_context(
-                f"{result.value.page}페이지 · {result.source.value}"
+                f"Page {result.value.page} · {result.source.value}"
             )
             if result.warning:
                 self.notify(result.warning, severity="warning", markup=False)
@@ -484,17 +542,22 @@ class CommunityReaderApp(App[None]):
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         if not self._reader_is_usable() or not isinstance(event.item, PostItem):
             return
-        self.current_post = event.item.post
+        self._open_post(event.item.post)
+
+    def _open_post(self, post: PostSummary) -> None:
+        if not self._reader_is_usable():
+            return
+        self.current_post = post
         self.comment_page = 1
         self.comments_have_previous = False
         self.comments_have_next = False
         self._displayed_post_id = None
-        self._show_loading(event.item.post)
-        main = self.query_one("#main", Horizontal)
-        main.add_class("reading")
-        if main.has_class("narrow"):
+        self._show_loading(post)
+        shell = self.query_one(ExplorerShell)
+        shell.show_article(post)
+        if shell.has_class("narrow"):
             self.query_one("#article-pane", ArticlePane).focus()
-        self.load_post(post=event.item.post, target_page=1)
+        self.load_post(post=post, target_page=1)
 
     def load_post(
         self,
@@ -550,14 +613,14 @@ class CommunityReaderApp(App[None]):
             summary = page.detail.summary
             self.query_one("#article-title", Static).update(summary.title)
             self.query_one("#article-meta", Static).update(
-                f"{summary.author} · {summary.created_at} · 조회 {summary.views} "
-                f"· 추천 {summary.votes} · 댓글 {summary.comment_count}"
+                f"{summary.author} · {summary.created_at} · Views {summary.views} "
+                f"· Votes {summary.votes} · Comments {summary.comment_count}"
             )
             self.query_one("#article-content", Static).update(
                 self._format_article(page)
             )
             self.sub_title = self._status_with_context(
-                f"글 {summary.post_id} · 댓글 {page.comments.page}페이지 "
+                f"Post {summary.post_id} · Comments page {page.comments.page} "
                 f"· {result.source.value}"
             )
             if result.warning:
@@ -579,34 +642,34 @@ class CommunityReaderApp(App[None]):
 
     def _show_loading(self, post: PostSummary) -> None:
         self.query_one("#article-title", Static).update(post.title)
-        self.query_one("#article-meta", Static).update("불러오는 중...")
-        self.query_one("#article-content", Static).update("불러오는 중...")
+        self.query_one("#article-meta", Static).update("Loading...")
+        self.query_one("#article-content", Static).update("Loading...")
         self.sub_title = self._status_with_context(
-            f"글 {post.post_id} · 불러오는 중"
+            f"Post {post.post_id} · Loading..."
         )
 
     def _show_load_failure(
         self, post: PostSummary, error: ReaderError
     ) -> None:
         self.query_one("#article-title", Static).update(post.title)
-        self.query_one("#article-meta", Static).update("불러오기 실패")
+        self.query_one("#article-meta", Static).update("Load failed")
         self.query_one("#article-content", Static).update(
-            f"불러오기 실패: {error}"
+            f"Load failed: {error}"
         )
         self.sub_title = self._status_with_context(
-            f"글 {post.post_id} · 불러오기 실패"
+            f"Post {post.post_id} · Load failed"
         )
 
     @staticmethod
     def _format_article(page: PostPage) -> str:
         sections = [page.detail.body]
         if page.detail.links:
-            sections.append("링크\n" + "\n".join(page.detail.links))
+            sections.append("Links\n" + "\n".join(page.detail.links))
         comments = "\n\n".join(
             CommunityReaderApp._format_comment(comment)
             for comment in page.comments.items
         )
-        sections.append(f"댓글 {page.comments.page}페이지\n{comments}")
+        sections.append(f"Comments · Page {page.comments.page}\n{comments}")
         return "\n\n".join(sections)
 
     @staticmethod
@@ -655,56 +718,77 @@ class CommunityReaderApp(App[None]):
         else:
             self.load_board(refresh=True)
 
-    def action_back(self) -> None:
+    async def action_back(self) -> None:
+        shell = self.query_one(ExplorerShell)
+        access = shell.query_one(AccessPane)
+        target_url = access.query_one("#explorer-target-url")
+        if target_url.display:
+            access.show_options()
+            return
+        if not self._reader_is_usable() and shell.has_class("site"):
+            shell.show_root()
+            self.query_one(NavigationTree).focus()
+            return
         if not self._reader_is_usable():
             return
-        self.query_one("#main", Horizontal).remove_class("reading")
-        self.query_one("#post-list", ListView).focus()
-        if self._direct_start:
-            self._direct_start = False
-            self.current_post = None
-            self.load_board()
+        article = self.query_one("#article-pane", ArticlePane)
+        post_list = self.query_one("#post-list", ListView)
+        tree = self.query_one(NavigationTree)
+        if article.has_focus or shell.active_pane == "article":
+            shell.show_list()
+            post_list.focus()
+            if self._direct_start:
+                self._direct_start = False
+                self.current_post = None
+                self.load_board()
+            return
+        if post_list.has_focus or shell.active_pane == "list":
+            shell.focus_tree_board()
+            return
+        if tree.has_focus or shell.active_pane == "tree":
+            await self._switch_site(self.target.site)
 
-    async def action_switch_site(self) -> None:
-        if (
-            not self._reader_is_active()
-            or self._activation_in_progress
-            or self._switch_in_progress
-        ):
+    def action_switch_site(self) -> None:
+        if not self._reader_is_active() or self._activation_in_progress:
+            return
+        self.query_one(ExplorerShell).focus_tree_sites()
+
+    async def _switch_site(self, destination: Site | None = None) -> None:
+        if self._switch_in_progress:
             return
         self._switch_in_progress = True
         try:
-            await self._switch_site()
+            self.workers.cancel_all()
+            await self.workers.wait_for_complete()
+            try:
+                await self._release_owned_resources()
+            except Exception as error:
+                self._reader_unusable = True
+                self.notify(
+                    f"Resource cleanup failed: {error}",
+                    severity="error",
+                    markup=False,
+                )
+                return
+
+            self.target = None
+            self.adapter = None
+            self.service = None
+            self._reset_reader_state()
+            await self.query_one("#post-list", ListView).clear()
+            self.query_one("#article-title", Static).update("Select a post")
+            self.query_one("#article-meta", Static).update("")
+            self.query_one("#article-content", Static).update("")
+            shell = self.query_one(ExplorerShell)
+            if destination is None:
+                shell.show_root()
+            else:
+                shell.show_site(destination)
+            self._reader_context = ""
+            self.title = self.TITLE
+            self.sub_title = ""
         finally:
             self._switch_in_progress = False
-
-    async def _switch_site(self) -> None:
-        self.workers.cancel_all()
-        await self.workers.wait_for_complete()
-        try:
-            await self._release_owned_resources()
-        except Exception as error:
-            self._reader_unusable = True
-            self.notify(
-                f"리소스를 닫는 중 오류가 발생했습니다: {error}",
-                severity="error",
-                markup=False,
-            )
-            return
-
-        self.target = None
-        self.adapter = None
-        self.service = None
-        self._reset_reader_state()
-        await self.query_one("#post-list", ListView).clear()
-        self.query_one("#article-title", Static).update("글을 선택하세요")
-        self.query_one("#article-meta", Static).update("")
-        self.query_one("#article-content", Static).update("")
-        self.query_one("#main", Horizontal).remove_class("reading")
-        self._reader_context = ""
-        self.title = self.TITLE
-        self.sub_title = ""
-        self.push_screen(LauncherScreen(self.url_history), self._accept_target)
 
     def _reader_is_active(self) -> bool:
         return self.screen is self.default_screen
@@ -739,14 +823,23 @@ class CommunityReaderApp(App[None]):
         self._sync_layout(event.size.width)
 
     def _sync_layout(self, width: int) -> None:
-        main = self.default_screen.query_one("#main", Horizontal)
+        shell = self.default_screen.query_one(ExplorerShell)
         narrow = width < 100
-        main.set_class(narrow, "narrow")
-        if narrow:
-            if main.has_class("reading"):
-                self.default_screen.query_one("#article-pane", ArticlePane).focus()
+        shell.set_narrow(narrow)
+        if not narrow:
+            return
+        if shell.active_pane == "article":
+            self.default_screen.query_one("#article-pane", ArticlePane).focus()
+        elif shell.active_pane == "list":
+            self.default_screen.query_one("#post-list", ListView).focus()
+        elif shell.active_pane == "tree":
+            self.default_screen.query_one(NavigationTree).focus()
+        else:
+            access = self.default_screen.query_one(AccessPane)
+            if access.query_one("#explorer-target-url").display:
+                access.query_one("#explorer-target-url").focus()
             else:
-                self.default_screen.query_one("#post-list", ListView).focus()
+                access.focus_options()
 
 
 def parse_cli(argv: Sequence[str]) -> CommunityTarget | None:

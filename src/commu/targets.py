@@ -25,8 +25,8 @@ class Site(str, Enum):
     def display_name(self) -> str:
         return {
             Site.FMKOREA: "FMKorea",
-            Site.DCINSIDE: "디시인사이드",
-            Site.ARCA: "아카라이브",
+            Site.DCINSIDE: "DCInside",
+            Site.ARCA: "Arca Live",
         }[self]
 
 
