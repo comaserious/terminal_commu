@@ -91,6 +91,8 @@ class FmkAdapter:
     def board_url(self, page: int) -> str:
         if page == 1:
             return self.target.board_url
+        if urlsplit(self.target.board_url).query:
+            return f"{self.target.board_url}&page={page}"
         return (
             f"{_BASE_URL}/index.php"
             f"?mid={self.target.board_id}&page={page}"

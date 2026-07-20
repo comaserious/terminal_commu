@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urljoin, urlparse
 from bs4 import BeautifulSoup, Tag
 
 from commu.errors import ParseError
+from commu.media import image_placeholder
 from commu.models import Comment, PageResult, PostDetail, PostSummary
 
 
@@ -212,9 +213,9 @@ def _render_content(content: Tag) -> tuple[str, tuple[str, ...]]:
     for line_break in rendered.select("br"):
         line_break.replace_with("\n")
     for image in rendered.select("img"):
-        image.replace_with("[Image omitted]")
+        image.replace_with(image_placeholder(image.get("alt")))
     for video in rendered.select("video, iframe"):
-        video.replace_with("[Video omitted]")
+        video.replace_with("[Video]")
 
     lines = (
         normalized

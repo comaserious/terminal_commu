@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass
 from enum import Enum
-from urllib.parse import SplitResult, parse_qs, urlsplit, urlunsplit
+from urllib.parse import SplitResult, parse_qs, urlencode, urlsplit, urlunsplit
 
 from commu.errors import TargetError
 
@@ -90,6 +90,8 @@ def _route_fmk(parsed: SplitResult) -> CommunityTarget:
     board_url = _canonical_url("www.fmkorea.com", "/football_world")
     if path == "/football_world":
         return CommunityTarget(Site.FMKOREA, "football_world", board_url)
+    if path == "/index.php":
+        return _route_fmk_category(parsed)
 
     article_id = path.removeprefix("/")
     if path.count("/") != 1 or not _valid_article_id(article_id):
@@ -101,6 +103,31 @@ def _route_fmk(parsed: SplitResult) -> CommunityTarget:
         article_id,
         _canonical_url("www.fmkorea.com", f"/{article_id}"),
     )
+
+
+def _route_fmk_category(parsed: SplitResult) -> CommunityTarget:
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    if set(query) not in (
+        {"mid", "category"},
+        {"mid", "category", "page"},
+    ):
+        raise TargetError("Invalid FMKorea category URL")
+
+    board_id = _single_query_value(query, "mid")
+    category_id = _single_query_value(query, "category")
+    page = _single_query_value(query, "page") if "page" in query else None
+    if board_id != "football_world" or not _valid_positive_decimal(category_id):
+        raise TargetError("Invalid FMKorea category URL")
+    if page is not None and not _valid_positive_decimal(page):
+        raise TargetError("Invalid FMKorea category page")
+
+    canonical_query = urlencode(
+        {"mid": board_id, "category": category_id},
+    )
+    board_url = urlunsplit(
+        ("https", "www.fmkorea.com", "/index.php", canonical_query, "")
+    )
+    return CommunityTarget(Site.FMKOREA, board_id, board_url)
 
 
 def _route_dcinside(parsed: SplitResult) -> CommunityTarget:
@@ -188,6 +215,10 @@ def _valid_board_id(value: str | None) -> bool:
 
 def _valid_article_id(value: str | None) -> bool:
     return value is not None and value.isdecimal()
+
+
+def _valid_positive_decimal(value: str | None) -> bool:
+    return value is not None and re.fullmatch(r"[1-9][0-9]*", value) is not None
 
 
 def _single_query_value(query: dict[str, list[str]], name: str) -> str | None:

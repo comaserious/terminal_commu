@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup, Tag
 
 from commu.adapters.base import PagePolicy, RequestPolicy
 from commu.errors import ParseError
+from commu.media import image_placeholder
 from commu.models import Comment, PageResult, PostDetail, PostSummary
 from commu.targets import CommunityTarget, Site
 
@@ -83,7 +84,10 @@ def _render_content(content: Tag) -> tuple[str, tuple[str, ...]]:
         line_break.replace_with("\n")
     for image in rendered.select("img"):
         classes = image.get("class", [])
-        placeholder = "[DCCon]" if "written_dccon" in classes else "[Image]"
+        if "written_dccon" in classes:
+            placeholder = "[DCCon]"
+        else:
+            placeholder = image_placeholder(image.get("alt"))
         image.replace_with(placeholder)
     for video in rendered.select("video, iframe"):
         video.replace_with("[Video]")

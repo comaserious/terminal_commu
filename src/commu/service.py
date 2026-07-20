@@ -86,10 +86,13 @@ class CommunityService:
         prefix = f"v2:{self.adapter.target.site.value}:{self.adapter.target.board_id}"
         return ":".join((prefix, *(str(part) for part in parts)))
 
+    def _board_key(self, page: int) -> str:
+        return self._key("board", self.adapter.target.board_url, page)
+
     async def load_board(
         self, page: int, refresh: bool = False
     ) -> LoadResult[PageResult[PostSummary]]:
-        key = self._key("board", page)
+        key = self._board_key(page)
         if not refresh:
             cached = self._cached_board(key, allow_stale=False)
             if cached is not None:

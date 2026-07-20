@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup, Tag
 
 from commu.adapters.base import PagePolicy, RequestPolicy
 from commu.errors import ParseError
+from commu.media import image_placeholder
 from commu.models import Comment, PageResult, PostDetail, PostSummary
 from commu.targets import CommunityTarget, Site
 
@@ -80,7 +81,7 @@ def _render_content(content: Tag) -> tuple[str, tuple[str, ...]]:
         if "arca-emoticon" in classes:
             placeholder = "[Emoji]"
         elif media.name == "img":
-            placeholder = "[Image]"
+            placeholder = image_placeholder(media.get("alt"))
         else:
             placeholder = "[Video]"
         media.replace_with(placeholder)
